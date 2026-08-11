@@ -1,6 +1,6 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>LAN Scanner</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/status.css"></head>
 <body><canvas id="rain"></canvas><main>
-  <header><div><p class="eyebrow">NETWORK RECONNAISSANCE CONSOLE</p><h1>LAN <span>SCANNER</span></h1></div><div class="live"><i></i> LIVE MONITORING</div></header>
+  <header><div><p class="eyebrow">NETWORK RECONNAISSANCE CONSOLE</p><h1>LAN <span>SCANNER</span></h1></div><div class="header-actions"><div class="live"><i></i> LIVE MONITORING</div><button id="updateApp" type="button" title="Update from GitHub">↻ UPDATE <small id="appVersion"></small></button></div></header>
   <section class="controls panel"><label>NETWORK INTERFACE<select id="iface"></select></label><label>SCAN RANGE<input id="subnet" spellcheck="false" placeholder="192.168.1.0/24"></label><button id="scan"><span>▶</span> INITIATE SCAN</button></section>
   <section id="progress" class="progress hidden"><div><span id="progressText">SCANNING NETWORK...</span><b id="percent">0%</b></div><div class="track"><i></i></div></section>
   <section id="watchPanel" class="watch-panel panel hidden"><div class="watch-head"><div><p>IMMEDIATE WATCH</p><h2>SECOND-BY-SECOND PING</h2></div><div><span id="watchSummary">0 TARGETS</span><button id="clearWatch" type="button">CLEAR</button></div></div><div id="watchRows"></div></section>

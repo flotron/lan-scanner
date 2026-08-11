@@ -50,6 +50,13 @@ else: raise SystemExit('No free TCP port found')
 PY
 )
 install -d -m 755 "$APP_DIR/static" "$DATA_DIR"
+if [[ ! -s "$DATA_DIR/update-token" ]]; then
+    python3 - <<'PY' >"$DATA_DIR/update-token"
+import secrets
+print(secrets.token_urlsafe(18))
+PY
+fi
+chmod 600 "$DATA_DIR/update-token"
 install -m 755 scanner.py "$APP_DIR/scanner.py"
 install -m 755 update.sh "$APP_DIR/update.sh"
 install -m 644 VERSION "$APP_DIR/VERSION"
@@ -82,3 +89,5 @@ echo
 echo "LAN Scanner installed successfully."
 echo "URL: http://${IP:-localhost}:$PORT"
 echo "Selected free port: $PORT"
+echo "Web update PIN: $(cat "$DATA_DIR/update-token")"
+echo "Show it again with: sudo cat $DATA_DIR/update-token"

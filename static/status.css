@@ -5,6 +5,9 @@ tr.offline:hover { opacity: .68 !important; }
 .last-client { display: block; color: #769280; font-size: 9px; margin-top: 4px; }
 .name-source { display: block; color: #4e7b5d; font-size: 8px; margin-top: 4px; letter-spacing: .08em; }
 .hidden { display: none !important; }
+.header-actions { display: flex; align-items: center; gap: 18px; }
+.header-actions #updateApp { height: 34px; padding: 0 13px; font-size: 9px; }
+.header-actions #updateApp small { color: inherit; opacity: .68; margin-left: 5px; }
 .watch-panel { margin: 0 0 18px; overflow: hidden; border-color: rgba(0,255,120,.45); }
 .watch-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--line); }
 .watch-head p { color: var(--green); font-size: 9px; letter-spacing: .16em; margin: 0 0 4px; }
@@ -36,6 +39,7 @@ th.sortable i::after { content: '↕'; margin-left: 5px; color: #3d664a; font-st
 th.sortable.active.asc i::after { content: '▲'; color: var(--green); }
 th.sortable.active.desc i::after { content: '▼'; color: var(--green); }
 @media (max-width: 720px) {
+  .header-actions { align-items: flex-end; flex-direction: column; gap: 8px; }
   .table-tools { width: 100%; flex-direction: column; align-items: stretch; }
   .table-tools select, .table-tools input { width: 100%; }
   .watch-row { grid-template-columns: 92px 1fr 70px 28px; gap: 8px; padding: 9px 12px; }

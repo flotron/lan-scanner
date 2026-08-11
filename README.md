@@ -59,4 +59,4 @@ An installed machine updates from the same repository with:
 sudo /opt/lan-scanner/update.sh
 ```
 
-The updater downloads into a temporary directory and invokes the normal installer. Device history in `/var/lib/lan-scanner` is preserved.
+You can also use the `UPDATE` button in the web interface. For security, it asks for the update PIN shown by the installer. Retrieve it later with `sudo cat /var/lib/lan-scanner/update-token`. The updater downloads into a temporary directory, invokes the normal installer and reloads the interface after the service restarts. Device history in `/var/lib/lan-scanner` is preserved.
