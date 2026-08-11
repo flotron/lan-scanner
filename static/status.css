@@ -8,6 +8,7 @@ tr.offline:hover { opacity: .68 !important; }
 .header-actions { display: flex; align-items: center; gap: 18px; }
 .header-actions #updateApp { height: 34px; padding: 0 13px; font-size: 9px; }
 .header-actions #updateApp small { color: inherit; opacity: .68; margin-left: 5px; }
+.header-actions #updateApp.up-to-date:disabled { opacity: 1; cursor: default; border-color: rgba(0,255,120,.45); background: rgba(0,255,120,.06); }
 .watch-panel { margin: 0 0 18px; overflow: hidden; border-color: rgba(0,255,120,.45); }
 .watch-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--line); }
 .watch-head p { color: var(--green); font-size: 9px; letter-spacing: .16em; margin: 0 0 4px; }

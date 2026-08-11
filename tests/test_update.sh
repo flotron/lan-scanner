@@ -39,7 +39,7 @@ run_case() {
     make_fake_commands "$bin"
     if [[ $fail_restart == 0 ]]; then
         PATH="$bin:$PATH" TEST_ARCHIVE="$TEST_ROOT/release.tar.gz" LANSCAN_APP_DIR="$app" LANSCAN_DATA_DIR="$data" bash "$PROJECT_DIR/update.sh"
-        [[ $(<"$app/VERSION") == 20260811-5 ]]
+        [[ $(<"$app/VERSION") == 20260811-6 ]]
         [[ $(<"$data/port") == 8765 ]]
         [[ ! -e "$app.previous" ]]
         grep -q '"status":"success"' "$data/update-status.json"

@@ -14,6 +14,7 @@ import subprocess
 import threading
 import time
 import urllib.parse
+import urllib.request
 import xml.etree.ElementTree as ET
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -30,6 +31,8 @@ OUI_FILES = (Path("/usr/share/nmap/nmap-mac-prefixes"), Path("/usr/share/ieee-da
 state = {"running": False, "progress": 0, "subnet": "", "devices": [], "error": None, "started": None, "finished": None, "last_presence": None, "monitor_interval": 15}
 lock = threading.Lock()
 viewer_seen = 0.0
+version_cache = {"latest_version": "", "checked_at": 0.0, "error": ""}
+version_lock = threading.Lock()
 
 
 def current_version() -> str:
@@ -37,6 +40,31 @@ def current_version() -> str:
         return VERSION_FILE.read_text().strip()
     except OSError:
         return "unknown"
+
+
+def version_info(force: bool = False) -> dict:
+    current = current_version()
+    with version_lock:
+        if not force and time.time() - version_cache["checked_at"] < 300:
+            latest = version_cache["latest_version"]
+            return {"current_version": current, "latest_version": latest, "update_available": latest != current if latest else None, "check_error": version_cache["error"]}
+    latest = ""
+    error = ""
+    try:
+        request = urllib.request.Request(
+            "https://raw.githubusercontent.com/flotron/lan-scanner/main/VERSION",
+            headers={"User-Agent": "LAN-Scanner-Update-Check"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            candidate = response.read(128).decode().strip()
+        if not re.fullmatch(r"[0-9A-Za-z._-]{1,64}", candidate):
+            raise ValueError("GitHub returned an invalid version.")
+        latest = candidate
+    except Exception as exc:
+        error = str(exc)
+    with version_lock:
+        version_cache.update(latest_version=latest, checked_at=time.time(), error=error)
+    return {"current_version": current, "latest_version": latest, "update_available": latest != current if latest else None, "check_error": error}
 
 
 def write_update_status(payload: dict) -> None:
@@ -49,9 +77,10 @@ def write_update_status(payload: dict) -> None:
 def update_status() -> dict:
     try:
         value = json.loads(UPDATE_STATUS_FILE.read_text())
-        return value if isinstance(value, dict) else {"status": "idle"}
+        status = value if isinstance(value, dict) else {"status": "idle"}
     except (OSError, json.JSONDecodeError):
-        return {"status": "idle", "version": current_version()}
+        status = {"status": "idle"}
+    return {**status, **version_info()}
 
 
 def schedule_update(request_id: str = "") -> dict:
@@ -60,6 +89,11 @@ def schedule_update(request_id: str = "") -> dict:
     if shutil.which("systemd-run") is None:
         raise ValueError("systemd-run is required for web updates.")
     update_id = request_id if re.fullmatch(r"\d{13,16}", request_id) else str(int(time.time() * 1000))
+    versions = version_info(force=True)
+    if versions["update_available"] is False:
+        payload = {"id": update_id, "status": "up_to_date", "message": "LAN Scanner is already up to date.", "version": current_version(), "updated_at": int(time.time()), **versions}
+        write_update_status(payload)
+        return {"started": False, "up_to_date": True, **payload}
     unit = f"lan-scanner-update-{update_id}"
     payload = {"id": update_id, "status": "scheduled", "message": "Update scheduled.", "version": current_version(), "updated_at": int(time.time())}
     write_update_status(payload)

@@ -34,3 +34,31 @@ def test_immediate_watch_rejects_outside_subnet():
         pass
     else:
         raise AssertionError("outside address must be rejected")
+
+
+def test_update_is_rejected_when_versions_match(monkeypatch, tmp_path):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def read(self, _size):
+            return b"20260811-6\n"
+
+    version_file = tmp_path / "VERSION"
+    version_file.write_text("20260811-6\n")
+    monkeypatch.setattr(scanner, "VERSION_FILE", version_file)
+    monkeypatch.setattr(scanner, "UPDATE_STATUS_FILE", tmp_path / "status.json")
+    monkeypatch.setattr(scanner, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(scanner, "UPDATE_SCRIPT", Path(__file__).parents[1] / "update.sh")
+    monkeypatch.setattr(scanner.shutil, "which", lambda _name: "/usr/bin/systemd-run")
+    monkeypatch.setattr(scanner.urllib.request, "urlopen", lambda *_args, **_kwargs: Response())
+    monkeypatch.setattr(scanner.subprocess, "run", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("systemd-run must not execute")))
+    scanner.version_cache.update(latest_version="", checked_at=0, error="")
+
+    result = scanner.schedule_update("1723400000000")
+
+    assert result["started"] is False
+    assert result["up_to_date"] is True
