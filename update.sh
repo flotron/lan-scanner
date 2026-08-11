@@ -64,12 +64,14 @@ curl -fL --retry 3 --connect-timeout 10 \
     -o "$UPDATE_TMP/lan-scanner.tar.gz"
 tar -xzf "$UPDATE_TMP/lan-scanner.tar.gz" -C "$UPDATE_TMP"
 SOURCE_DIR="$UPDATE_TMP/lan-scanner-main"
-[[ -s "$SOURCE_DIR/scanner.py" && -s "$SOURCE_DIR/VERSION" && -s "$SOURCE_DIR/update.sh" && -d "$SOURCE_DIR/static" ]]
+[[ -s "$SOURCE_DIR/scanner.py" && -s "$SOURCE_DIR/VERSION" && -s "$SOURCE_DIR/update.sh" && -s "$SOURCE_DIR/dependencies.sh" && -d "$SOURCE_DIR/static" ]]
 python3 - "$SOURCE_DIR/scanner.py" <<'PY'
 import pathlib, sys
 compile(pathlib.Path(sys.argv[1]).read_text(), sys.argv[1], "exec")
 PY
 bash -n "$SOURCE_DIR/update.sh" "$SOURCE_DIR/install.sh"
+source "$SOURCE_DIR/dependencies.sh"
+ensure_dependencies
 NEW_VERSION=$(tr -d '\r\n' <"$SOURCE_DIR/VERSION")
 
 write_status installing "Installing version $NEW_VERSION without changing the port..." "$NEW_VERSION"
@@ -77,6 +79,7 @@ STAGE_DIR=$(mktemp -d "${APP_DIR}.next.XXXXXX")
 install -d -m 755 "$STAGE_DIR/static"
 install -m 755 "$SOURCE_DIR/scanner.py" "$STAGE_DIR/scanner.py"
 install -m 755 "$SOURCE_DIR/update.sh" "$STAGE_DIR/update.sh"
+install -m 644 "$SOURCE_DIR/dependencies.sh" "$STAGE_DIR/dependencies.sh"
 install -m 644 "$SOURCE_DIR/VERSION" "$STAGE_DIR/VERSION"
 install -m 644 "$SOURCE_DIR/static/"* "$STAGE_DIR/static/"
 [[ -f "$SOURCE_DIR/README.md" ]] && install -m 644 "$SOURCE_DIR/README.md" "$STAGE_DIR/README.md"

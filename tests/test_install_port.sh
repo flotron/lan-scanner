@@ -12,7 +12,7 @@ if [[ ${1:-} == is-active ]]; then [[ ${TEST_ACTIVE:-0} == 1 ]]; exit; fi
 exit 0
 SH
 chmod +x "$TEST_ROOT/bin/systemctl"
-for command in nmap ip ping; do
+for command in nmap ip ping systemd-run avahi-resolve-address nmblookup; do
     ln -s /bin/true "$TEST_ROOT/bin/$command"
 done
 cat >"$TEST_ROOT/bin/hostname" <<'SH'
@@ -40,10 +40,11 @@ run_installer() {
     LANSCAN_APP_DIR="$TEST_ROOT/app" \
     LANSCAN_DATA_DIR="$TEST_ROOT/data" \
     LANSCAN_SYSTEMD_DIR="$TEST_ROOT/systemd" \
+    LANSCAN_ALLOW_NON_SYSTEMD=1 \
     bash "$PROJECT_DIR/install.sh" >/dev/null
 }
 
-cd "$PROJECT_DIR"
+cd "$TEST_ROOT"
 run_installer 0
 FIRST_PORT=$(<"$TEST_ROOT/data/port")
 [[ "$FIRST_PORT" != "$OCCUPIED" ]]

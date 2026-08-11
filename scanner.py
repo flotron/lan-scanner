@@ -28,6 +28,8 @@ UPDATE_SCRIPT = BASE / "update.sh"
 UPDATE_STATUS_FILE = DATA_DIR / "update-status.json"
 OFFLINE_CONFIRMATIONS = max(2, int(os.getenv("LANSCAN_OFFLINE_CONFIRMATIONS", "3")))
 OUI_FILES = (Path("/usr/share/nmap/nmap-mac-prefixes"), Path("/usr/share/ieee-data/oui.txt"))
+REQUIRED_COMMANDS = ("python3", "nmap", "ip", "ping", "curl", "tar", "systemctl", "systemd-run")
+OPTIONAL_COMMANDS = ("avahi-resolve-address", "nmblookup")
 state = {"running": False, "progress": 0, "subnet": "", "devices": [], "error": None, "started": None, "finished": None, "last_presence": None, "monitor_interval": 15}
 lock = threading.Lock()
 viewer_seen = 0.0
@@ -42,12 +44,18 @@ def current_version() -> str:
         return "unknown"
 
 
+def dependency_info() -> dict:
+    missing_required = [command for command in REQUIRED_COMMANDS if shutil.which(command) is None]
+    missing_optional = [command for command in OPTIONAL_COMMANDS if shutil.which(command) is None]
+    return {"missing_dependencies": missing_required, "missing_optional_dependencies": missing_optional}
+
+
 def version_info(force: bool = False) -> dict:
     current = current_version()
     with version_lock:
         if not force and time.time() - version_cache["checked_at"] < 300:
             latest = version_cache["latest_version"]
-            return {"current_version": current, "latest_version": latest, "update_available": latest != current if latest else None, "check_error": version_cache["error"]}
+            return {"current_version": current, "latest_version": latest, "update_available": latest != current if latest else None, "check_error": version_cache["error"], **dependency_info()}
     latest = ""
     error = ""
     try:
@@ -64,7 +72,7 @@ def version_info(force: bool = False) -> dict:
         error = str(exc)
     with version_lock:
         version_cache.update(latest_version=latest, checked_at=time.time(), error=error)
-    return {"current_version": current, "latest_version": latest, "update_available": latest != current if latest else None, "check_error": error}
+    return {"current_version": current, "latest_version": latest, "update_available": latest != current if latest else None, "check_error": error, **dependency_info()}
 
 
 def write_update_status(payload: dict) -> None:
@@ -90,7 +98,8 @@ def schedule_update(request_id: str = "") -> dict:
         raise ValueError("systemd-run is required for web updates.")
     update_id = request_id if re.fullmatch(r"\d{13,16}", request_id) else str(int(time.time() * 1000))
     versions = version_info(force=True)
-    if versions["update_available"] is False:
+    missing_tools = versions["missing_dependencies"] + versions["missing_optional_dependencies"]
+    if versions["update_available"] is False and not missing_tools:
         payload = {"id": update_id, "status": "up_to_date", "message": "LAN Scanner is already up to date.", "version": current_version(), "updated_at": int(time.time()), **versions}
         write_update_status(payload)
         return {"started": False, "up_to_date": True, **payload}

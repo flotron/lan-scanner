@@ -62,3 +62,5 @@ sudo /opt/lan-scanner/update.sh
 You can also use the `UPDATE` button in the web interface without opening a terminal. Web updates are accepted only from the local network and always download from this fixed repository. The updater validates the download before touching the running installation, preserves the configured port and performs an automatic rollback if the new service does not become healthy. Device history in `/var/lib/lan-scanner` is preserved.
 
 The installer selects a free port only on the first installation. Reinstalling or updating reuses the port stored in `/var/lib/lan-scanner/port`; it chooses another port only during recovery when the saved port is genuinely occupied by a different process.
+
+Required dependencies are installed automatically: Python 3, Nmap, `iproute2`, ping utilities, curl, tar and systemd tools. Avahi and NetBIOS lookup tools are also installed when available to improve host-name identification. The supported package managers are APT, DNF and Pacman; an unrelated broken APT repository produces a warning and the installer still tries the available package indexes.

@@ -22,3 +22,4 @@ jobs:
       - run: pytest -q
       - run: bash tests/test_update.sh
       - run: bash tests/test_install_port.sh
+      - run: bash tests/test_dependencies.sh

@@ -7,38 +7,9 @@ SYSTEMD_DIR="${LANSCAN_SYSTEMD_DIR:-/etc/systemd/system}"
 SERVICE_FILE="$SYSTEMD_DIR/lan-scanner.service"
 PORT_FILE="$DATA_DIR/port"
 START_PORT="${LANSCAN_START_PORT:-8765}"
-missing=()
-command -v python3 >/dev/null || missing+=(python3)
-command -v nmap >/dev/null || missing+=(nmap)
-command -v ip >/dev/null || missing+=(iproute2)
-command -v ping >/dev/null || missing+=(iputils-ping)
-if (( ${#missing[@]} )); then
-    if command -v apt-get >/dev/null; then
-        apt-get update || echo "Warning: apt update failed because of an external repository; trying with the available package indexes."
-        apt-get install -y "${missing[@]}"
-    elif command -v dnf >/dev/null; then
-        dnf_missing=("${missing[@]}")
-        for i in "${!dnf_missing[@]}"; do
-            [[ ${dnf_missing[$i]} == iproute2 ]] && dnf_missing[$i]=iproute
-            [[ ${dnf_missing[$i]} == iputils-ping ]] && dnf_missing[$i]=iputils
-        done
-        dnf install -y "${dnf_missing[@]}"
-    elif command -v pacman >/dev/null; then
-        pacman_missing=("${missing[@]}")
-        for i in "${!pacman_missing[@]}"; do
-            [[ ${pacman_missing[$i]} == python3 ]] && pacman_missing[$i]=python
-            [[ ${pacman_missing[$i]} == iputils-ping ]] && pacman_missing[$i]=iputils
-        done
-        pacman -Sy --noconfirm "${pacman_missing[@]}"
-    else
-        echo "Missing requirements: ${missing[*]}. Install them and run this script again."
-        exit 1
-    fi
-fi
-command -v python3 >/dev/null && command -v nmap >/dev/null && command -v ip >/dev/null && command -v ping >/dev/null || {
-    echo "Could not install all requirements (python3, nmap, iproute2, iputils-ping)."
-    exit 1
-}
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+source "$SCRIPT_DIR/dependencies.sh"
+ensure_dependencies
 install -d -m 755 "$DATA_DIR"
 WAS_ACTIVE=0
 systemctl is-active --quiet lan-scanner 2>/dev/null && WAS_ACTIVE=1
@@ -74,10 +45,11 @@ systemctl stop lan-scanner 2>/dev/null || true
 systemctl disable --now lan-matrix-scanner 2>/dev/null || true
 rm -f "$SYSTEMD_DIR/lan-matrix-scanner.service"
 install -d -m 755 "$APP_DIR/static"
-install -m 755 scanner.py "$APP_DIR/scanner.py"
-install -m 755 update.sh "$APP_DIR/update.sh"
-install -m 644 VERSION "$APP_DIR/VERSION"
-install -m 644 static/* "$APP_DIR/static/"
+install -m 755 "$SCRIPT_DIR/scanner.py" "$APP_DIR/scanner.py"
+install -m 755 "$SCRIPT_DIR/update.sh" "$APP_DIR/update.sh"
+install -m 644 "$SCRIPT_DIR/dependencies.sh" "$APP_DIR/dependencies.sh"
+install -m 644 "$SCRIPT_DIR/VERSION" "$APP_DIR/VERSION"
+install -m 644 "$SCRIPT_DIR/static/"* "$APP_DIR/static/"
 echo "$PORT" >"$PORT_FILE"
 chmod 644 "$PORT_FILE"
 install -d -m 755 "$SYSTEMD_DIR"

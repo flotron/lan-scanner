@@ -6,7 +6,7 @@ TEST_ROOT=$(mktemp -d)
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
 mkdir -p "$TEST_ROOT/release/lan-scanner-main"
-cp -a "$PROJECT_DIR/scanner.py" "$PROJECT_DIR/update.sh" "$PROJECT_DIR/install.sh" "$PROJECT_DIR/VERSION" "$PROJECT_DIR/static" "$TEST_ROOT/release/lan-scanner-main/"
+cp -a "$PROJECT_DIR/scanner.py" "$PROJECT_DIR/update.sh" "$PROJECT_DIR/install.sh" "$PROJECT_DIR/dependencies.sh" "$PROJECT_DIR/VERSION" "$PROJECT_DIR/static" "$TEST_ROOT/release/lan-scanner-main/"
 tar -czf "$TEST_ROOT/release.tar.gz" -C "$TEST_ROOT/release" lan-scanner-main
 
 make_fake_commands() {
@@ -28,6 +28,7 @@ if [[ ${TEST_FAIL_RESTART:-0} == 1 && ${1:-} == restart ]]; then exit 1; fi
 exit 0
 SH
     chmod +x "$bin_dir/curl" "$bin_dir/systemctl"
+    for command in nmap ip ping systemd-run avahi-resolve-address nmblookup; do ln -s /bin/true "$bin_dir/$command"; done
 }
 
 run_case() {
@@ -38,13 +39,13 @@ run_case() {
     echo 8765 >"$data/port"
     make_fake_commands "$bin"
     if [[ $fail_restart == 0 ]]; then
-        PATH="$bin:$PATH" TEST_ARCHIVE="$TEST_ROOT/release.tar.gz" LANSCAN_APP_DIR="$app" LANSCAN_DATA_DIR="$data" bash "$PROJECT_DIR/update.sh"
-        [[ $(<"$app/VERSION") == 20260811-6 ]]
+        PATH="$bin:$PATH" TEST_ARCHIVE="$TEST_ROOT/release.tar.gz" LANSCAN_ALLOW_NON_SYSTEMD=1 LANSCAN_APP_DIR="$app" LANSCAN_DATA_DIR="$data" bash "$PROJECT_DIR/update.sh"
+        [[ $(<"$app/VERSION") == 20260811-7 ]]
         [[ $(<"$data/port") == 8765 ]]
         [[ ! -e "$app.previous" ]]
         grep -q '"status":"success"' "$data/update-status.json"
     else
-        if PATH="$bin:$PATH" TEST_ARCHIVE="$TEST_ROOT/release.tar.gz" TEST_FAIL_RESTART=1 LANSCAN_APP_DIR="$app" LANSCAN_DATA_DIR="$data" bash "$PROJECT_DIR/update.sh"; then
+        if PATH="$bin:$PATH" TEST_ARCHIVE="$TEST_ROOT/release.tar.gz" TEST_FAIL_RESTART=1 LANSCAN_ALLOW_NON_SYSTEMD=1 LANSCAN_APP_DIR="$app" LANSCAN_DATA_DIR="$data" bash "$PROJECT_DIR/update.sh"; then
             echo "Expected the simulated update to fail" >&2
             exit 1
         fi
