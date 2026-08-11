@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
-import hmac
 import ipaddress
 import json
 import os
@@ -25,7 +24,7 @@ DATA_DIR = Path(os.getenv("LANSCAN_DATA_DIR", str(BASE / "data")))
 HISTORY_FILE = DATA_DIR / "devices.json"
 VERSION_FILE = BASE / "VERSION"
 UPDATE_SCRIPT = BASE / "update.sh"
-UPDATE_TOKEN_FILE = DATA_DIR / "update-token"
+UPDATE_STATUS_FILE = DATA_DIR / "update-status.json"
 OFFLINE_CONFIRMATIONS = max(2, int(os.getenv("LANSCAN_OFFLINE_CONFIRMATIONS", "3")))
 OUI_FILES = (Path("/usr/share/nmap/nmap-mac-prefixes"), Path("/usr/share/ieee-data/oui.txt"))
 state = {"running": False, "progress": 0, "subnet": "", "devices": [], "error": None, "started": None, "finished": None, "last_presence": None, "monitor_interval": 15}
@@ -40,19 +39,32 @@ def current_version() -> str:
         return "unknown"
 
 
-def schedule_update(token: str) -> dict:
+def write_update_status(payload: dict) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    temporary = UPDATE_STATUS_FILE.with_suffix(".tmp")
+    temporary.write_text(json.dumps(payload, separators=(",", ":")))
+    temporary.replace(UPDATE_STATUS_FILE)
+
+
+def update_status() -> dict:
     try:
-        expected_token = UPDATE_TOKEN_FILE.read_text().strip()
-    except OSError:
-        raise ValueError("Update PIN is not configured. Run the installer once from the terminal.")
-    if not token or not hmac.compare_digest(token, expected_token):
-        raise PermissionError("Invalid update PIN.")
+        value = json.loads(UPDATE_STATUS_FILE.read_text())
+        return value if isinstance(value, dict) else {"status": "idle"}
+    except (OSError, json.JSONDecodeError):
+        return {"status": "idle", "version": current_version()}
+
+
+def schedule_update() -> dict:
     if not UPDATE_SCRIPT.is_file():
         raise ValueError("Update script is not installed.")
     if shutil.which("systemd-run") is None:
         raise ValueError("systemd-run is required for web updates.")
+    update_id = str(int(time.time() * 1000))
+    unit = f"lan-scanner-update-{update_id}"
+    payload = {"id": update_id, "status": "scheduled", "message": "Update scheduled.", "version": current_version(), "updated_at": int(time.time())}
+    write_update_status(payload)
     completed = subprocess.run(
-        ["systemd-run", "--unit=lan-scanner-update", "--collect", "--property=Type=oneshot", str(UPDATE_SCRIPT)],
+        ["systemd-run", f"--unit={unit}", "--collect", "--property=Type=oneshot", f"--setenv=LANSCAN_UPDATE_ID={update_id}", str(UPDATE_SCRIPT)],
         text=True,
         capture_output=True,
         timeout=10,
@@ -60,8 +72,22 @@ def schedule_update(token: str) -> dict:
     )
     if completed.returncode:
         message = (completed.stderr or completed.stdout).strip()
+        write_update_status({**payload, "status": "failed", "message": message or "Could not schedule the update."})
         raise ValueError(message or "Could not schedule the update.")
-    return {"started": True, "version": current_version()}
+    return {"started": True, "id": update_id, "version": current_version()}
+
+
+def local_update_request(address: str, origin: str, host: str) -> bool:
+    try:
+        client = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    local_overlay = client.version == 4 and client in ipaddress.ip_network("100.64.0.0/10")
+    if not (client.is_private or client.is_loopback or local_overlay):
+        return False
+    if origin:
+        return urllib.parse.urlparse(origin).netloc == host
+    return True
 
 
 def run(command: list[str], timeout: int = 30) -> str:
@@ -459,6 +485,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json({"ok": True})
             if parsed.path == "/api/version":
                 return self.send_json({"version": current_version()})
+            if parsed.path == "/api/update":
+                return self.send_json(update_status())
             if parsed.path == "/api/details":
                 ip = urllib.parse.parse_qs(parsed.query).get("ip", [""])[0]
                 return self.send_json(detail_scan(ip))
@@ -471,10 +499,9 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({"error": "Not found"}, 404)
         try:
             if self.path == "/api/update":
-                try:
-                    return self.send_json(schedule_update(self.headers.get("X-Update-Token", "")), 202)
-                except PermissionError as exc:
-                    return self.send_json({"error": str(exc)}, 403)
+                if not local_update_request(self.client_address[0], self.headers.get("Origin", ""), self.headers.get("Host", "")):
+                    return self.send_json({"error": "Web updates are restricted to this local network."}, 403)
+                return self.send_json(schedule_update(), 202)
             size = min(int(self.headers.get("Content-Length", "0")), 8192)
             body = json.loads(self.rfile.read(size) or b"{}")
             if self.path == "/api/watch":
