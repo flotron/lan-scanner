@@ -54,17 +54,17 @@ def update_status() -> dict:
         return {"status": "idle", "version": current_version()}
 
 
-def schedule_update() -> dict:
+def schedule_update(request_id: str = "") -> dict:
     if not UPDATE_SCRIPT.is_file():
         raise ValueError("Update script is not installed.")
     if shutil.which("systemd-run") is None:
         raise ValueError("systemd-run is required for web updates.")
-    update_id = str(int(time.time() * 1000))
+    update_id = request_id if re.fullmatch(r"\d{13,16}", request_id) else str(int(time.time() * 1000))
     unit = f"lan-scanner-update-{update_id}"
     payload = {"id": update_id, "status": "scheduled", "message": "Update scheduled.", "version": current_version(), "updated_at": int(time.time())}
     write_update_status(payload)
     completed = subprocess.run(
-        ["systemd-run", f"--unit={unit}", "--collect", "--property=Type=oneshot", f"--setenv=LANSCAN_UPDATE_ID={update_id}", str(UPDATE_SCRIPT)],
+        ["systemd-run", "--no-block", f"--unit={unit}", "--collect", "--property=Type=oneshot", f"--setenv=LANSCAN_UPDATE_ID={update_id}", str(UPDATE_SCRIPT)],
         text=True,
         capture_output=True,
         timeout=10,
@@ -501,7 +501,7 @@ class Handler(SimpleHTTPRequestHandler):
             if self.path == "/api/update":
                 if not local_update_request(self.client_address[0], self.headers.get("Origin", ""), self.headers.get("Host", "")):
                     return self.send_json({"error": "Web updates are restricted to this local network."}, 403)
-                return self.send_json(schedule_update(), 202)
+                return self.send_json(schedule_update(self.headers.get("X-Update-Id", "")), 202)
             size = min(int(self.headers.get("Content-Length", "0")), 8192)
             body = json.loads(self.rfile.read(size) or b"{}")
             if self.path == "/api/watch":
