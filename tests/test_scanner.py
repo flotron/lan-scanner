@@ -62,3 +62,18 @@ def test_update_is_rejected_when_versions_match(monkeypatch, tmp_path):
 
     assert result["started"] is False
     assert result["up_to_date"] is True
+
+
+def test_table_headers_and_cells_use_the_same_order():
+    root = Path(__file__).parents[1]
+    html = (root / "static/index.html").read_text()
+    app = (root / "static/app.js").read_text()
+    assert html.index("STATUS") < html.index("IP ADDRESS") < html.index("MAC ADDRESS") < html.index("NAME / LAST CLIENT")
+
+    start = app.index("return `<tr data-ip=")
+    row = app[start:app.index("}).join('')", start)]
+    status = row.index("${on?'ONLINE':'OFFLINE'}")
+    ip = row.index("${esc(d.ip)}", status)
+    mac = row.index("${esc(d.mac||'Not recorded')}", ip)
+    name = row.index("${esc(d.name||", ip)
+    assert status < ip < mac < name
