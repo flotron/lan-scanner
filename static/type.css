@@ -1,0 +1,7 @@
+input,
+select,
+button {
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 13px;
+  font-variant-ligatures: none;
+}
