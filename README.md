@@ -27,6 +27,8 @@ On devices that block `/proc/net/arp` (including recent Samsung firmware), the a
 
 Every Android change is compiled by GitHub Actions. Open the latest `Android APK` workflow run, download the `lan-scanner-android` artifact and sideload `app-debug.apk`. GitHub release builds also attach it as `lan-scanner-android.apk`. Google Play distribution is intentionally not supported because raising the target SDK would remove the required ARP/MAC behavior.
 
+**Permanent public download:** [Download the latest Android APK](https://github.com/flotron/lan-scanner/releases/latest/download/lan-scanner-android.apk). No GitHub account is required. Versioned APKs remain available on the [Releases page](https://github.com/flotron/lan-scanner/releases).
+
 ## Immediate watch
 
 Select the `WATCH` checkbox beside the few addresses you are working on. They are grouped in one panel and pinged concurrently once per second, independently from normal network discovery. Every target shows its immediate state, latency, check time, and the last 18 replies. A single missed reply is shown immediately in this panel; the conservative three-check rule continues to apply only to the general device list. Selections are kept in the browser and the endpoint is capped at 32 addresses to prevent accidental load.

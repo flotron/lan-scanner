@@ -36,6 +36,21 @@ jobs:
           name: lan-scanner-android
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+      - name: Publish permanent Android release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' android/app/build.gradle.kts | head -n 1)"
+          TAG="android-v${VERSION}"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --title "LAN Scanner Android ${VERSION}" \
+              --notes "Standalone Android LAN scanner. Download and install lan-scanner-android.apk."
+          fi
+          gh release upload "$TAG" \
+            android/app/build/outputs/apk/debug/app-debug.apk#lan-scanner-android.apk \
+            --clobber
       - name: Attach APK to GitHub release
         if: github.event_name == 'release'
         env:
