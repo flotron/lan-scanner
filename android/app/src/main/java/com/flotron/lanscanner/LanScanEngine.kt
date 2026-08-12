@@ -1,6 +1,8 @@
 package com.flotron.lanscanner
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Handler
 import android.os.Looper
 import java.io.File
@@ -20,6 +22,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.max
 
 class LanScanEngine(context: Context, private val onState: (ScanState) -> Unit) {
+    private val appContext = context.applicationContext
     private val main = Handler(Looper.getMainLooper())
     private val coordinator = Executors.newSingleThreadExecutor()
     private val vendors = VendorDatabase(context)
@@ -28,16 +31,25 @@ class LanScanEngine(context: Context, private val onState: (ScanState) -> Unit) 
     @Volatile private var state = ScanState()
 
     fun currentRange(): NetworkRange? {
-        val interfaces = Collections.list(NetworkInterface.getNetworkInterfaces())
-        val candidates = interfaces.filter { it.isUp && !it.isLoopback }.flatMap { network ->
-            network.interfaceAddresses.mapNotNull { entry ->
-                val address = entry.address
-                if (address is Inet4Address && !address.isLoopbackAddress && !address.isLinkLocalAddress) {
-                    Triple(network.name, address.hostAddress ?: return@mapNotNull null, entry.networkPrefixLength.toInt())
-                } else null
+        val connectivity = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val candidates = connectivity.allNetworks.mapNotNull { androidNetwork ->
+            val capabilities = connectivity.getNetworkCapabilities(androidNetwork) ?: return@mapNotNull null
+            val transportPriority = when {
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> 0
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> 1
+                else -> return@mapNotNull null
             }
-        }
-        val (_, ip, actualPrefix) = candidates.firstOrNull() ?: return null
+            val properties = connectivity.getLinkProperties(androidNetwork) ?: return@mapNotNull null
+            val address = properties.linkAddresses.firstOrNull {
+                it.address is Inet4Address && !it.address.isLoopbackAddress && !it.address.isLinkLocalAddress &&
+                    isPrivateIpv4(it.address as Inet4Address)
+            } ?: return@mapNotNull null
+            val ip = address.address.hostAddress ?: return@mapNotNull null
+            Candidate(transportPriority, properties.interfaceName ?: return@mapNotNull null, ip, address.prefixLength)
+        }.sortedBy { it.priority }
+        val selected = candidates.firstOrNull() ?: return null
+        val ip = selected.ip
+        val actualPrefix = selected.prefix
         // A phone should not accidentally flood a corporate supernet. Scan its containing /24 at most.
         val prefix = max(actualPrefix, 24)
         val bytes = ip.split('.').map(String::toInt)
@@ -48,7 +60,7 @@ class LanScanEngine(context: Context, private val onState: (ScanState) -> Unit) 
         val hosts = ((network + 1) until broadcast).map { value ->
             "${value ushr 24 and 255}.${value ushr 16 and 255}.${value ushr 8 and 255}.${value and 255}"
         }
-        return NetworkRange(ip, prefix, hosts, intToIp(network))
+        return NetworkRange(ip, prefix, hosts, intToIp(network), selected.interfaceName)
     }
 
     fun scan(cidrOverride: String? = null) {
@@ -72,7 +84,7 @@ class LanScanEngine(context: Context, private val onState: (ScanState) -> Unit) 
             if (cancelled) return@execute
             Thread.sleep(500)
             publish(state.copy(progress = 78, message = "READING IP / MAC NEIGHBOR TABLE"))
-            val arp = readArpTable()
+            val arp = readArpTable(range)
             if (arp == null) {
                 return@execute publish(state.copy(scanning = false, progress = 0, macAccessAvailable = false,
                     message = "MAC ACCESS BLOCKED ON THIS ANDROID VERSION"))
@@ -143,16 +155,21 @@ class LanScanEngine(context: Context, private val onState: (ScanState) -> Unit) 
         }
     }
 
-    private fun readArpTable(): Map<String, String>? {
+    private fun readArpTable(range: NetworkRange): Map<String, String>? {
         val file = File("/proc/net/arp")
-        if (!file.canRead()) return null
-        return runCatching {
+        val fromProc = if (file.canRead()) runCatching {
             file.readLines().drop(1).mapNotNull { line ->
                 val fields = line.trim().split(Regex("\\s+"))
                 if (fields.size >= 4 && fields[2] != "0x0" && fields[3].matches(Regex("(?i)([0-9a-f]{2}:){5}[0-9a-f]{2}")) && fields[3] != "00:00:00:00:00:00")
                     fields[0] to fields[3].uppercase() else null
             }.toMap()
-        }.getOrNull()
+        }.getOrNull() else null
+        if (!fromProc.isNullOrEmpty()) return fromProc
+        if (!NativeArp.available) return if (fromProc != null) emptyMap() else null
+        val nativeEntries = range.hosts.mapNotNull { ip ->
+            NativeArp.lookup(ip, range.interfaceName)?.let { ip to it }
+        }.toMap()
+        return nativeEntries.takeIf { it.isNotEmpty() || fromProc != null }
     }
 
     private fun resolveName(ip: String): String {
@@ -213,11 +230,21 @@ class LanScanEngine(context: Context, private val onState: (ScanState) -> Unit) 
         val network = raw and mask
         val broadcast = network or mask.inv()
         val hosts = ((network + 1) until broadcast).map(::intToIp)
-        NetworkRange(currentRange()?.localIp ?: parts[0], prefix, hosts, intToIp(network))
+        val active = currentRange() ?: return@runCatching null
+        NetworkRange(active.localIp, prefix, hosts, intToIp(network), active.interfaceName)
     }.getOrNull()
 
     private fun intToIp(value: Int): String =
         "${value ushr 24 and 255}.${value ushr 16 and 255}.${value ushr 8 and 255}.${value and 255}"
 
+    private fun isPrivateIpv4(address: Inet4Address): Boolean {
+        val bytes = address.address.map { it.toInt() and 0xff }
+        return bytes[0] == 10 ||
+            (bytes[0] == 172 && bytes[1] in 16..31) ||
+            (bytes[0] == 192 && bytes[1] == 168)
+    }
+
     private fun ipValue(ip: String): Long = ip.split('.').fold(0L) { total, octet -> total * 256 + octet.toLong() }
+
+    private data class Candidate(val priority: Int, val interfaceName: String, val ip: String, val prefix: Int)
 }

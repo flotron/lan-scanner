@@ -110,7 +110,7 @@ class LanDashboardView(context: Context) : View(context) {
         text(canvas, "SCAN RANGE", x + 14f * density, y + 61f * density, 8f, dim, spacing = 1.3f)
         val range = engine.currentRange()
         rangeRect = RectF(x + 120f * density, y + 39f * density, width - x - 12f * density, y + 68f * density)
-        text(canvas, range?.localIp ?: "NO CONNECTION", x + 130f * density, y + 22f * density, 10f, pale)
+        text(canvas, range?.let { "${it.interfaceName} — ${it.localIp}" } ?: "NO WI-FI / ETHERNET", x + 130f * density, y + 22f * density, 9f, pale)
         text(canvas, customRange ?: range?.cidr ?: "—", x + 130f * density, y + 61f * density, 10f, pale)
         scanRect = RectF(x + 14f * density, y + 72f * density, width - x - 14f * density, y + 98f * density)
         button(canvas, scanRect, if (state.scanning) "SCANNING ${state.progress}%" else "▶ INITIATE SCAN")

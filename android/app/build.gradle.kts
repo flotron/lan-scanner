@@ -11,8 +11,11 @@ android {
         applicationId = "com.flotron.lanscanner"
         minSdk = 24
         targetSdk = 31
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.1.1"
+        externalNativeBuild {
+            cmake { cppFlags += "-std=c++17" }
+        }
     }
 
     compileOptions {
@@ -20,6 +23,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+
+    externalNativeBuild {
+        cmake { path = file("src/main/cpp/CMakeLists.txt") }
+    }
 
     buildFeatures { buildConfig = true }
     buildTypes {
