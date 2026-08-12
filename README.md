@@ -14,10 +14,12 @@ The repository also contains a fully native, stand-alone Android scanner in [`an
 
 - automatic local-subnet detection plus an editable `/24` to `/30` CIDR;
 - verified IPv4/MAC pairs, offline history, local IEEE vendor lookup, hostname and latency;
-- sorting, an online-only filter, TCP port inspection and user-initiated full scans;
+- sorting, all/online/offline status filters, TCP port inspection and user-initiated full scans;
 - up to 16 immediate-watch targets pinged once per second, with grouped result cells that clear and restart after filling the row.
 - inertial touch scrolling, animated code rain matching the Linux interface, three-state status filtering and a built-in About/source panel;
-- an adaptive LAN Scanner launcher icon and platform-native monospace typography across the interface and dialogs.
+- a radar/router adaptive launcher icon, the bundled open-source Share Tech Mono typeface and phosphor glow effects matching the Linux interface.
+
+After a full scan, every usable address in the selected subnet is listed. Addresses without an active neighbor are dimmed as offline; if one was seen previously, its last-known MAC, vendor and hostname are retained. To keep a `/24` list smooth, Android lays out the complete result set but only renders the cards currently visible on screen.
 
 MAC address visibility is a hard requirement for this build. Android removed access to the kernel ARP table for newer target SDKs, so this sideload edition deliberately targets Android API 31 while compiling with current tooling. It reads `/proc/net/arp`; if a phone vendor blocks that file anyway, the app reports `MAC ACCESS REQUIRED` and refuses to present misleading partial results. It cannot discover MAC addresses across a routed VLAN.
 

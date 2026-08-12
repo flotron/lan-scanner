@@ -8,6 +8,8 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.graphics.LinearGradient
+import android.graphics.Shader
 import android.os.Handler
 import android.os.Looper
 import android.net.Uri
@@ -21,6 +23,9 @@ import android.view.ViewConfiguration
 import android.widget.EditText
 import android.widget.OverScroller
 import android.widget.TextView
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.random.Random
@@ -31,7 +36,9 @@ class LanDashboardView(context: Context) : View(context) {
     private val dim = Color.rgb(103, 157, 121)
     private val red = Color.rgb(255, 76, 91)
     private val panel = Color.rgb(3, 22, 12)
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = Typeface.MONOSPACE }
+    private val matrixTypeface = resources.getFont(R.font.share_tech_mono)
+    private val matrixBold = Typeface.create(matrixTypeface, Typeface.BOLD)
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = matrixTypeface }
     private val engine = LanScanEngine(context) { updateState(it) }
     private val handler = Handler(Looper.getMainLooper())
     private val scroller = OverScroller(context)
@@ -81,6 +88,7 @@ class LanDashboardView(context: Context) : View(context) {
 
     init {
         setBackgroundColor(Color.rgb(2, 8, 5))
+        setLayerType(LAYER_TYPE_SOFTWARE, null)
         isFocusable = true
         startWatchLoop()
     }
@@ -149,6 +157,7 @@ class LanDashboardView(context: Context) : View(context) {
         var y = 0f
         while (y < height) { canvas.drawLine(0f, y, width.toFloat(), y, paint); y += 4f }
         paint.textSize = 13f * density
+        // The bundled font has no Katakana glyphs, so keep Android's fallback for the rain only.
         paint.typeface = Typeface.MONOSPACE
         rainDrops.indices.forEach { column ->
             val x = column * 18f * density
@@ -166,9 +175,10 @@ class LanDashboardView(context: Context) : View(context) {
     private fun drawHeader(canvas: Canvas, x: Float, y: Float): Float {
         text(canvas, "NETWORK RECONNAISSANCE CONSOLE", x, y, 9f, dim, spacing = 2f)
         text(canvas, "LAN", x, y + 43f * density, 31f, pale, bold = true)
-        text(canvas, "SCANNER", x + 72f * density, y + 43f * density, 31f, green, bold = true)
+        text(canvas, "SCANNER", x + 72f * density, y + 43f * density, 31f, green, bold = true, glow = true)
         aboutRect = RectF(width - 112f * density, y - 12f * density, width - 14f * density, y + 27f * density)
-        text(canvas, "● LIVE   ⓘ", width - 104f * density, y + 12f * density, 8f, green)
+        glowDot(canvas, width - 101f * density, y + 9f * density)
+        text(canvas, "LIVE   ⓘ", width - 95f * density, y + 12f * density, 8f, green, glow = true)
         line(canvas, x, y + 64f * density, width - x, y + 64f * density)
         return y + 64f * density
     }
@@ -228,9 +238,11 @@ class LanDashboardView(context: Context) : View(context) {
         val cardW = (width - 2 * x - gap) / 2
         val online = state.devices.count { it.online }
         stat(canvas, RectF(x, y, x + cardW, y + 67f * density), online.toString(), "HOSTS ONLINE")
-        stat(canvas, RectF(x + cardW + gap, y, width - x, y + 67f * density), state.devices.size.toString(), "VERIFIED MACS")
+        val verifiedMacs = state.devices.count { validMac(it.mac) }
+        stat(canvas, RectF(x + cardW + gap, y, width - x, y + 67f * density), verifiedMacs.toString(), "VERIFIED MACS")
         stat(canvas, RectF(x, y + 75f * density, x + cardW, y + 142f * density), "${state.progress}%", "SCAN PROGRESS")
-        stat(canvas, RectF(x + cardW + gap, y + 75f * density, width - x, y + 142f * density), if (lastScanStarted == 0L) "NEVER" else "DONE", "LAST SCAN")
+        val lastScan = if (lastScanStarted == 0L) "NEVER" else SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(lastScanStarted))
+        stat(canvas, RectF(x + cardW + gap, y + 75f * density, width - x, y + 142f * density), lastScan, "LAST SCAN")
         return y + 142f * density
     }
 
@@ -268,19 +280,24 @@ class LanDashboardView(context: Context) : View(context) {
             } }
         visible.forEach { device ->
             val rect = RectF(x, rowY, width - x, rowY + 105f * density)
-            panel(canvas, rect, alpha = if (device.online) 230 else 105)
-            val watch = RectF(x + 12f * density, rowY + 14f * density, x + 37f * density, rowY + 39f * density)
-            paint.style = Paint.Style.STROKE; paint.strokeWidth = 1.5f * density; paint.color = if (device.ip in watched) green else dim
-            canvas.drawRect(watch, paint); paint.style = Paint.Style.FILL
-            if (device.ip in watched) text(canvas, "✓", watch.left + 5f * density, watch.bottom - 6f * density, 11f, green, bold = true)
-            watchRects += watch to device
-            text(canvas, if (device.online) "● ONLINE" else "● OFFLINE", x + 48f * density, rowY + 29f * density, 8f, if (device.online) green else dim, bold = true)
-            text(canvas, device.ip, x + 13f * density, rowY + 59f * density, 13f, pale, bold = true)
-            text(canvas, device.mac, x + 13f * density, rowY + 78f * density, 9f, dim)
-            text(canvas, device.name, x + 170f * density, rowY + 58f * density, 9f, pale)
-            text(canvas, device.vendor.take(25), x + 170f * density, rowY + 78f * density, 8f, dim)
-            text(canvas, "›", width - x - 17f * density, rowY + 65f * density, 20f, green)
-            rowRects += rect to device
+            val onScreen = rect.bottom >= scrollYValue - 8f * density && rect.top <= scrollYValue + height + 8f * density
+            if (onScreen) {
+                panel(canvas, rect, alpha = if (device.online) 230 else 105)
+                val watch = RectF(x + 12f * density, rowY + 14f * density, x + 37f * density, rowY + 39f * density)
+                paint.style = Paint.Style.STROKE; paint.strokeWidth = 1.5f * density; paint.color = if (device.ip in watched) green else dim
+                canvas.drawRect(watch, paint); paint.style = Paint.Style.FILL
+                if (device.ip in watched) text(canvas, "✓", watch.left + 5f * density, watch.bottom - 6f * density, 11f, green, bold = true, glow = true)
+                watchRects += watch to device
+                if (device.online) glowDot(canvas, x + 52f * density, rowY + 26f * density)
+                else dimDot(canvas, x + 52f * density, rowY + 26f * density)
+                text(canvas, if (device.online) "ONLINE" else "OFFLINE", x + 59f * density, rowY + 29f * density, 8f, if (device.online) green else dim, bold = true, glow = device.online)
+                text(canvas, device.ip, x + 13f * density, rowY + 59f * density, 13f, pale, bold = true)
+                text(canvas, device.mac, x + 13f * density, rowY + 78f * density, 9f, dim)
+                text(canvas, device.name, x + 170f * density, rowY + 58f * density, 9f, pale)
+                text(canvas, device.vendor.take(25), x + 170f * density, rowY + 78f * density, 8f, dim)
+                text(canvas, "›", width - x - 17f * density, rowY + 65f * density, 20f, green, glow = true)
+                rowRects += rect to device
+            }
             rowY += 113f * density
         }
         return rowY
@@ -392,7 +409,7 @@ class LanDashboardView(context: Context) : View(context) {
         val input = EditText(context).apply {
             setText(customRange ?: displayedRange?.cidr.orEmpty())
             setTextColor(pale); setHintTextColor(dim); setBackgroundColor(Color.rgb(3, 22, 12))
-            typeface = Typeface.MONOSPACE; setPadding(20, 12, 20, 12)
+            typeface = matrixTypeface; setPadding(20, 12, 20, 12)
         }
         AlertDialog.Builder(context)
             .setTitle("SCAN RANGE (/24 TO /30)")
@@ -422,7 +439,7 @@ class LanDashboardView(context: Context) : View(context) {
             text = body
             setTextColor(pale)
             setLinkTextColor(green)
-            typeface = Typeface.MONOSPACE
+            typeface = matrixTypeface
             textSize = 14f
             setPadding((24 * density).toInt(), (8 * density).toInt(), (24 * density).toInt(), 0)
             movementMethod = LinkMovementMethod.getInstance()
@@ -442,29 +459,50 @@ class LanDashboardView(context: Context) : View(context) {
     private fun stat(canvas: Canvas, rect: RectF, value: String, label: String) {
         panel(canvas, rect)
         paint.color = green; canvas.drawRect(rect.left, rect.top, rect.left + 2f * density, rect.bottom, paint)
-        text(canvas, value, rect.left + 14f * density, rect.top + 32f * density, 19f, green, bold = true)
+        text(canvas, value, rect.left + 14f * density, rect.top + 32f * density, 19f, green, bold = true, glow = true)
         text(canvas, label, rect.left + 14f * density, rect.top + 53f * density, 7f, dim, spacing = 1f)
     }
 
     private fun panel(canvas: Canvas, rect: RectF, strong: Boolean = false, alpha: Int = 220) {
-        paint.color = Color.argb(alpha, Color.red(panel), Color.green(panel), Color.blue(panel)); canvas.drawRect(rect, paint)
+        paint.shader = LinearGradient(rect.left, rect.top, rect.right, rect.bottom,
+            Color.argb(alpha, 3, 25, 13), Color.argb(alpha, 2, 13, 8), Shader.TileMode.CLAMP)
+        canvas.drawRect(rect, paint)
+        paint.shader = null
         paint.style = Paint.Style.STROKE; paint.strokeWidth = if (strong) 1.5f * density else 1f
         paint.color = Color.argb(if (strong) 125 else 65, 0, 255, 120); canvas.drawRect(rect, paint); paint.style = Paint.Style.FILL
     }
 
     private fun button(canvas: Canvas, rect: RectF, label: String) {
         paint.color = Color.argb(18, 0, 255, 120); canvas.drawRect(rect, paint)
-        paint.style = Paint.Style.STROKE; paint.strokeWidth = 1f * density; paint.color = green; canvas.drawRect(rect, paint); paint.style = Paint.Style.FILL
-        paint.textSize = 10f * density; paint.typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD); paint.letterSpacing = .08f
+        paint.style = Paint.Style.STROKE; paint.strokeWidth = 1f * density; paint.color = green
+        paint.setShadowLayer(4f * density, 0f, 0f, Color.argb(135, 0, 255, 120)); canvas.drawRect(rect, paint); paint.clearShadowLayer(); paint.style = Paint.Style.FILL
+        paint.textSize = 10f * density; paint.typeface = matrixBold; paint.letterSpacing = .08f
         val width = paint.measureText(label); paint.color = green
-        canvas.drawText(label, rect.centerX() - width / 2, rect.centerY() + 4f * density, paint); paint.letterSpacing = 0f
+        paint.setShadowLayer(4f * density, 0f, 0f, Color.argb(120, 0, 255, 120))
+        canvas.drawText(label, rect.centerX() - width / 2, rect.centerY() + 4f * density, paint); paint.clearShadowLayer(); paint.letterSpacing = 0f
     }
 
-    private fun text(canvas: Canvas, value: String, x: Float, y: Float, size: Float, color: Int, bold: Boolean = false, spacing: Float = 0f) {
-        paint.textSize = size * density; paint.color = color; paint.typeface = Typeface.create(Typeface.MONOSPACE, if (bold) Typeface.BOLD else Typeface.NORMAL)
+    private fun text(canvas: Canvas, value: String, x: Float, y: Float, size: Float, color: Int, bold: Boolean = false, spacing: Float = 0f, glow: Boolean = false) {
+        paint.textSize = size * density; paint.color = color; paint.typeface = if (bold) matrixBold else matrixTypeface
         paint.letterSpacing = spacing / 10f
-        canvas.drawText(value, x, y, paint); paint.letterSpacing = 0f
+        if (glow) paint.setShadowLayer(5f * density, 0f, 0f, Color.argb(145, Color.red(color), Color.green(color), Color.blue(color)))
+        canvas.drawText(value, x, y, paint)
+        paint.clearShadowLayer(); paint.letterSpacing = 0f
     }
+
+    private fun glowDot(canvas: Canvas, x: Float, y: Float) {
+        paint.color = green
+        paint.setShadowLayer(7f * density, 0f, 0f, green)
+        canvas.drawCircle(x, y, 3f * density, paint)
+        paint.clearShadowLayer()
+    }
+
+    private fun dimDot(canvas: Canvas, x: Float, y: Float) {
+        paint.color = Color.argb(105, Color.red(dim), Color.green(dim), Color.blue(dim))
+        canvas.drawCircle(x, y, 3f * density, paint)
+    }
+
+    private fun validMac(mac: String): Boolean = mac.matches(Regex("(?i)([0-9a-f]{2}:){5}[0-9a-f]{2}"))
 
     private fun line(canvas: Canvas, x1: Float, y1: Float, x2: Float, y2: Float, alpha: Int = 65) {
         paint.color = Color.argb(alpha, 0, 255, 120); paint.strokeWidth = 1f; canvas.drawLine(x1, y1, x2, y2, paint)

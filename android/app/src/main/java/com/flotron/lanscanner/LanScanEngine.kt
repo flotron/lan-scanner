@@ -109,9 +109,13 @@ class LanScanEngine(context: Context, private val onState: (ScanState) -> Unit) 
             val merged = previous.toMutableMap()
             found.forEach { merged[it.ip] = it }
             history.save(merged.values)
-            val currentIps = found.mapTo(mutableSetOf()) { it.ip }
-            val offline = merged.values.filter { it.ip in range.hosts && it.ip !in currentIps }.map { it.copy(online = false) }
-            publish(ScanState(range.cidr, false, 100, (found + offline).sortedBy { ipValue(it.ip) },
+            val foundByIp = found.associateBy { it.ip }
+            val allAddresses = range.hosts.map { ip ->
+                foundByIp[ip]
+                    ?: merged[ip]?.copy(online = false, latencyMs = null)
+                    ?: LanDevice(ip, "Not recorded", "Unknown", "No client recorded", online = false, lastSeen = 0)
+            }
+            publish(ScanState(range.cidr, false, 100, allAddresses,
                 "${found.size} CLIENTS WITH VERIFIED MAC", true))
         }
     }
