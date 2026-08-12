@@ -1,6 +1,8 @@
 package com.flotron.lanscanner
 
 object NativeArp {
+    @Volatile var lastError: String = ""
+        private set
     val available: Boolean = runCatching {
         System.loadLibrary("lanscanner_arp")
         true
@@ -12,13 +14,19 @@ object NativeArp {
     }
 
     fun dump(interfaceName: String): Map<String, String>? {
-        if (!available) return null
+        if (!available) { lastError = "NATIVE LIBRARY NOT AVAILABLE"; return null }
         return runCatching {
-            dumpNative(interfaceName).lineSequence().mapNotNull { line ->
+            val raw = dumpNative(interfaceName)
+            if (raw.startsWith("!")) {
+                lastError = raw.drop(1)
+                return@runCatching null
+            }
+            lastError = ""
+            raw.lineSequence().mapNotNull { line ->
                 val separator = line.indexOf('=')
                 if (separator > 0) line.substring(0, separator) to line.substring(separator + 1) else null
             }.toMap()
-        }.getOrNull()
+        }.getOrElse { lastError = it.javaClass.simpleName; null }
     }
 
     private external fun lookupNative(ip: String, interfaceName: String): String?

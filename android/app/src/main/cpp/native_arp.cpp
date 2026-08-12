@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <cerrno>
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_flotron_lanscanner_NativeArp_lookupNative(
@@ -48,16 +49,21 @@ Java_com_flotron_lanscanner_NativeArp_dumpNative(
     const char *interface_name = env->GetStringUTFChars(interface_value, nullptr);
     const unsigned int interface_index = if_nametoindex(interface_name);
     env->ReleaseStringUTFChars(interface_value, interface_name);
-    if (interface_index == 0) return env->NewStringUTF("");
+    if (interface_index == 0) return env->NewStringUTF("!INTERFACE NOT FOUND");
 
     const int socket_fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE);
-    if (socket_fd < 0) return env->NewStringUTF("");
+    if (socket_fd < 0) {
+        char error[64]; std::snprintf(error, sizeof(error), "!NETLINK SOCKET ERROR %d", errno);
+        return env->NewStringUTF(error);
+    }
 
     sockaddr_nl local{};
     local.nl_family = AF_NETLINK;
     if (bind(socket_fd, reinterpret_cast<sockaddr *>(&local), sizeof(local)) != 0) {
+        const int error_number = errno;
         close(socket_fd);
-        return env->NewStringUTF("");
+        char error[64]; std::snprintf(error, sizeof(error), "!NETLINK BIND ERROR %d", error_number);
+        return env->NewStringUTF(error);
     }
 
     struct {
@@ -75,8 +81,10 @@ Java_com_flotron_lanscanner_NativeArp_dumpNative(
     kernel.nl_family = AF_NETLINK;
     if (sendto(socket_fd, &request, request.header.nlmsg_len, 0,
                reinterpret_cast<sockaddr *>(&kernel), sizeof(kernel)) < 0) {
+        const int error_number = errno;
         close(socket_fd);
-        return env->NewStringUTF("");
+        char error[64]; std::snprintf(error, sizeof(error), "!NETLINK SEND ERROR %d", error_number);
+        return env->NewStringUTF(error);
     }
 
     std::string result;
@@ -84,7 +92,11 @@ Java_com_flotron_lanscanner_NativeArp_dumpNative(
     while (!complete) {
         char buffer[16384];
         const ssize_t received = recv(socket_fd, buffer, sizeof(buffer), 0);
-        if (received <= 0) break;
+        if (received < 0) {
+            char error[64]; std::snprintf(error, sizeof(error), "!NETLINK RECEIVE ERROR %d", errno);
+            close(socket_fd); return env->NewStringUTF(error);
+        }
+        if (received == 0) break;
         int remaining = static_cast<int>(received);
         for (nlmsghdr *header = reinterpret_cast<nlmsghdr *>(buffer);
              NLMSG_OK(header, remaining); header = NLMSG_NEXT(header, remaining)) {
@@ -121,5 +133,6 @@ Java_com_flotron_lanscanner_NativeArp_dumpNative(
         }
     }
     close(socket_fd);
+    if (result.empty()) return env->NewStringUTF("!NETLINK RETURNED NO ARP NEIGHBORS");
     return env->NewStringUTF(result.c_str());
 }

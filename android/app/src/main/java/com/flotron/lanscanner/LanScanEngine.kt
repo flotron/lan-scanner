@@ -86,8 +86,8 @@ class LanScanEngine(context: Context, private val onState: (ScanState) -> Unit) 
             publish(state.copy(progress = 78, message = "READING IP / MAC NEIGHBOR TABLE"))
             val arp = readArpTable(range)
             if (arp == null) {
-                return@execute publish(state.copy(scanning = false, progress = 0, macAccessAvailable = false,
-                    message = "MAC ACCESS BLOCKED ON THIS ANDROID VERSION"))
+                return@execute publish(state.copy(scanning = false, progress = 100, macAccessAvailable = false,
+                    message = "MAC ACCESS BLOCKED: ${NativeArp.lastError.ifBlank { "NEIGHBOR TABLE UNAVAILABLE" }}"))
             }
 
             val previous = history.load()

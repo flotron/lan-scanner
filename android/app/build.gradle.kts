@@ -5,14 +5,14 @@ plugins {
 
 android {
     namespace = "com.flotron.lanscanner"
-    compileSdk = 35
+    compileSdk = 31
 
     defaultConfig {
         applicationId = "com.flotron.lanscanner"
-        minSdk = 24
+        minSdk = 29
         targetSdk = 31
-        versionCode = 3
-        versionName = "0.1.2"
+        versionCode = 4
+        versionName = "0.1.3"
         externalNativeBuild {
             cmake { cppFlags += "-std=c++17" }
         }

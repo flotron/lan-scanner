@@ -46,12 +46,23 @@ class LanDashboardView(context: Context) : View(context) {
     private var detailPorts: List<Int>? = null
     private var detailRect = RectF()
     private var lastScanStarted = 0L
+    private var discoveryStarted = false
     private val density = resources.displayMetrics.density
 
     init {
         setBackgroundColor(Color.rgb(2, 8, 5))
         isFocusable = true
         startWatchLoop()
+    }
+
+    fun beginDiscovery(permissionGranted: Boolean) {
+        if (!permissionGranted) {
+            state = state.copy(message = "LOCATION PERMISSION REQUIRED FOR LAN / MAC DISCOVERY")
+            invalidate()
+            return
+        }
+        if (discoveryStarted) return
+        discoveryStarted = true
         startAutoScan()
     }
 
@@ -178,8 +189,8 @@ class LanDashboardView(context: Context) : View(context) {
         if (!state.macAccessAvailable) {
             panel(canvas, RectF(x, rowY, width - x, rowY + 110f * density), strong = true)
             text(canvas, "MAC ACCESS REQUIRED", x + 14f * density, rowY + 30f * density, 12f, red, bold = true)
-            text(canvas, "THIS ANDROID BUILD BLOCKED /proc/net/arp", x + 14f * density, rowY + 55f * density, 8f, pale)
-            text(canvas, "NO INCOMPLETE RESULTS ARE SHOWN", x + 14f * density, rowY + 78f * density, 8f, dim)
+            text(canvas, "NEIGHBOR TABLE ACCESS FAILED", x + 14f * density, rowY + 55f * density, 8f, pale)
+            text(canvas, state.message.take(48), x + 14f * density, rowY + 78f * density, 7f, dim)
             return rowY + 110f * density
         }
         if (state.devices.isEmpty()) {
