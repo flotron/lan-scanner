@@ -28,13 +28,30 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
-      - name: Build sideload APK
+      - name: Prepare stable Android signing key
+        env:
+          ANDROID_SIGNING_KEY_BASE64: ${{ secrets.ANDROID_SIGNING_KEY_BASE64 }}
+        run: |
+          if [ -z "$ANDROID_SIGNING_KEY_BASE64" ]; then
+            echo "::error::Repository secret ANDROID_SIGNING_KEY_BASE64 is required; refusing to publish an APK with an ephemeral signature."
+            exit 1
+          fi
+          KEYSTORE_PATH="$RUNNER_TEMP/lan-scanner-release.jks"
+          printf '%s' "$ANDROID_SIGNING_KEY_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+          keytool -list -keystore "$KEYSTORE_PATH" -storepass lan-scanner-release -alias lan-scanner >/dev/null
+          echo "LANSCANNER_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+      - name: Build signed sideload APK
         working-directory: android
-        run: gradle --no-daemon assembleDebug
+        run: gradle --no-daemon assembleRelease
+      - name: Verify APK signature
+        run: |
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -n "$APKSIGNER"
+          "$APKSIGNER" verify --verbose --print-certs android/app/build/outputs/apk/release/app-release.apk
       - uses: actions/upload-artifact@v4
         with:
           name: lan-scanner-android
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
       - name: Publish permanent Android release
         if: github.event_name == 'push'
@@ -48,11 +65,11 @@ jobs:
               --title "LAN Scanner Android ${VERSION}" \
               --notes "Standalone Android LAN scanner. Download and install lan-scanner-android.apk."
           fi
-          cp android/app/build/outputs/apk/debug/app-debug.apk lan-scanner-android.apk
+          cp android/app/build/outputs/apk/release/app-release.apk lan-scanner-android.apk
           gh release upload "$TAG" lan-scanner-android.apk --clobber
           gh release delete-asset "$TAG" app-debug.apk --yes >/dev/null 2>&1 || true
       - name: Attach APK to GitHub release
         if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" android/app/build/outputs/apk/debug/app-debug.apk#lan-scanner-android.apk
+        run: gh release upload "${{ github.event.release.tag_name }}" android/app/build/outputs/apk/release/app-release.apk#lan-scanner-android.apk

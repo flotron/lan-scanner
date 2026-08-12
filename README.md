@@ -31,6 +31,8 @@ Every Android change is compiled by GitHub Actions. Open the latest `Android APK
 
 **Permanent public download:** [Download the latest Android APK](https://github.com/flotron/lan-scanner/releases/latest/download/lan-scanner-android.apk). No GitHub account is required. Versioned APKs remain available on the [Releases page](https://github.com/flotron/lan-scanner/releases).
 
+Android releases use one persistent private signing certificate so that later APKs install as genuine in-place updates. The private key is held only in the `ANDROID_SIGNING_KEY_BASE64` GitHub Actions secret and is never committed to this public repository. The release certificate SHA-256 fingerprint is `DD:37:68:AA:45:AB:F9:FD:6E:05:D7:2F:9A:A7:70:EE:10:6E:24:47:9D:62:0B:47:F3:5A:AE:23:6B:00:61:CC`.
+
 ## Immediate watch
 
 Select the `WATCH` checkbox beside the few addresses you are working on. They are grouped in one panel and pinged concurrently once per second, independently from normal network discovery. Every target shows its immediate state, latency, check time, and the last 18 replies. A single missed reply is shown immediately in this panel; the conservative three-check rule continues to apply only to the general device list. Selections are kept in the browser and the endpoint is capped at 32 addresses to prevent accidental load.

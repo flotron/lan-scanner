@@ -3,6 +3,8 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val lanScannerKeystorePath = System.getenv("LANSCANNER_KEYSTORE_PATH")
+
 android {
     namespace = "com.flotron.lanscanner"
     compileSdk = 31
@@ -11,8 +13,8 @@ android {
         applicationId = "com.flotron.lanscanner"
         minSdk = 29
         targetSdk = 31
-        versionCode = 9
-        versionName = "0.2.2"
+        versionCode = 10
+        versionName = "0.2.3"
         externalNativeBuild {
             cmake { cppFlags += "-std=c++17" }
         }
@@ -29,9 +31,20 @@ android {
     }
 
     buildFeatures { buildConfig = true }
+    signingConfigs {
+        if (!lanScannerKeystorePath.isNullOrBlank()) {
+            create("stableRelease") {
+                storeFile = file(lanScannerKeystorePath)
+                storePassword = "lan-scanner-release"
+                keyAlias = "lan-scanner"
+                keyPassword = "lan-scanner-release"
+            }
+        }
+    }
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfigs.findByName("stableRelease")?.let { signingConfig = it }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
