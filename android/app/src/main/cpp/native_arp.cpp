@@ -57,15 +57,6 @@ Java_com_flotron_lanscanner_NativeArp_dumpNative(
         return env->NewStringUTF(error);
     }
 
-    sockaddr_nl local{};
-    local.nl_family = AF_NETLINK;
-    if (bind(socket_fd, reinterpret_cast<sockaddr *>(&local), sizeof(local)) != 0) {
-        const int error_number = errno;
-        close(socket_fd);
-        char error[64]; std::snprintf(error, sizeof(error), "!NETLINK BIND ERROR %d", error_number);
-        return env->NewStringUTF(error);
-    }
-
     struct {
         nlmsghdr header;
         ndmsg neighbor;

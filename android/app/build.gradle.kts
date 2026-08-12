@@ -11,8 +11,8 @@ android {
         applicationId = "com.flotron.lanscanner"
         minSdk = 29
         targetSdk = 31
-        versionCode = 4
-        versionName = "0.1.3"
+        versionCode = 5
+        versionName = "0.1.4"
         externalNativeBuild {
             cmake { cppFlags += "-std=c++17" }
         }
