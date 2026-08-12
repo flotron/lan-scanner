@@ -4,17 +4,21 @@ plugins {
 }
 
 val lanScannerKeystorePath = System.getenv("LANSCANNER_KEYSTORE_PATH")
+val macDiscoveryEnabled = providers.gradleProperty("macDiscoveryEnabled").orElse("true")
 
 android {
     namespace = "com.flotron.lanscanner"
-    compileSdk = 31
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.flotron.lanscanner"
         minSdk = 29
         targetSdk = 31
-        versionCode = 10
-        versionName = "0.2.3"
+        versionCode = 11
+        versionName = "0.2.4"
+        // One application, one update path. Set false only if a future Play migration
+        // requires removal of local ARP/netlink MAC discovery.
+        buildConfigField("boolean", "MAC_DISCOVERY_ENABLED", macDiscoveryEnabled.get())
         externalNativeBuild {
             cmake { cppFlags += "-std=c++17" }
         }

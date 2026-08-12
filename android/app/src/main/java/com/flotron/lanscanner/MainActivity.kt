@@ -19,7 +19,7 @@ class MainActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         dashboard = LanDashboardView(this)
         setContentView(dashboard)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+        if (BuildConfig.MAC_DISCOVERY_ENABLED && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
             checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,

@@ -40,6 +40,7 @@ class LanDashboardView(context: Context) : View(context) {
     private val matrixBold = Typeface.create(matrixTypeface, Typeface.BOLD)
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = matrixTypeface }
     private val engine = LanScanEngine(context) { updateState(it) }
+    private val uiPreferences = context.getSharedPreferences("scanner_ui", Context.MODE_PRIVATE)
     private val handler = Handler(Looper.getMainLooper())
     private val scroller = OverScroller(context)
     private val viewConfiguration = ViewConfiguration.get(context)
@@ -62,7 +63,7 @@ class LanDashboardView(context: Context) : View(context) {
     private var sortRect = RectF()
     private var customRange: String? = null
     private var displayedRange: NetworkRange? = engine.currentRange()
-    private var statusFilter = 0
+    private var statusFilter = 1
     private var sortMode = 0
     private var selected: LanDevice? = null
     private var detailPorts: List<Int>? = null
@@ -127,6 +128,7 @@ class LanDashboardView(context: Context) : View(context) {
 
     private fun updateState(value: ScanState) {
         state = value
+        if (value.scanning && value.progress == 0 && value.subnet.contains('/')) rememberRange(value.subnet)
         if (!value.scanning && value.progress == 100) lastScanStarted = System.currentTimeMillis()
         invalidate()
     }
@@ -239,7 +241,12 @@ class LanDashboardView(context: Context) : View(context) {
         val online = state.devices.count { it.online }
         stat(canvas, RectF(x, y, x + cardW, y + 67f * density), online.toString(), "HOSTS ONLINE")
         val verifiedMacs = state.devices.count { validMac(it.mac) }
-        stat(canvas, RectF(x + cardW + gap, y, width - x, y + 67f * density), verifiedMacs.toString(), "VERIFIED MACS")
+        stat(
+            canvas,
+            RectF(x + cardW + gap, y, width - x, y + 67f * density),
+            if (BuildConfig.MAC_DISCOVERY_ENABLED) verifiedMacs.toString() else "—",
+            if (BuildConfig.MAC_DISCOVERY_ENABLED) "VERIFIED MACS" else "MAC UNAVAILABLE"
+        )
         stat(canvas, RectF(x, y + 75f * density, x + cardW, y + 142f * density), "${state.progress}%", "SCAN PROGRESS")
         val lastScan = if (lastScanStarted == 0L) "NEVER" else SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(lastScanStarted))
         stat(canvas, RectF(x + cardW + gap, y + 75f * density, width - x, y + 142f * density), lastScan, "LAST SCAN")
@@ -421,7 +428,47 @@ class LanDashboardView(context: Context) : View(context) {
                 invalidate()
             }
             .setNegativeButton("DEFAULT") { _, _ -> customRange = null; engine.scan(); invalidate() }
+            .setNeutralButton("HISTORY") { _, _ -> showRangeHistoryDialog() }
             .show()
+    }
+
+    private fun showRangeHistoryDialog() {
+        val ranges = savedRanges()
+        if (ranges.isEmpty()) {
+            AlertDialog.Builder(context)
+                .setTitle("SCAN RANGE HISTORY")
+                .setMessage("NO SAVED SUBNETS YET")
+                .setPositiveButton("CLOSE", null)
+                .show()
+            return
+        }
+        AlertDialog.Builder(context)
+            .setTitle("SCAN RANGE HISTORY")
+            .setItems(ranges.toTypedArray()) { _, index ->
+                customRange = ranges[index]
+                engine.scan(customRange)
+                invalidate()
+            }
+            .setNegativeButton("CLOSE", null)
+            .setNeutralButton("CLEAR") { _, _ ->
+                uiPreferences.edit().remove(RANGE_HISTORY_KEY).apply()
+            }
+            .show()
+    }
+
+    private fun savedRanges(): List<String> = uiPreferences
+        .getString(RANGE_HISTORY_KEY, "")
+        .orEmpty()
+        .lineSequence()
+        .map { it.trim() }
+        .filter(String::isNotEmpty)
+        .distinct()
+        .take(MAX_SAVED_RANGES)
+        .toList()
+
+    private fun rememberRange(cidr: String) {
+        val updated = (listOf(cidr) + savedRanges().filterNot { it == cidr }).take(MAX_SAVED_RANGES)
+        uiPreferences.edit().putString(RANGE_HISTORY_KEY, updated.joinToString("\n")).apply()
     }
 
     private fun showAboutDialog() {
@@ -429,6 +476,7 @@ class LanDashboardView(context: Context) : View(context) {
         val body = SpannableString(
             "LAN Scanner Android ${BuildConfig.VERSION_NAME}\n\n" +
                 "Standalone local-network scanner created by Mariano Flotron.\n\n" +
+                "MAC discovery: ${if (BuildConfig.MAC_DISCOVERY_ENABLED) "ENABLED" else "UNAVAILABLE IN THIS DISTRIBUTION"}\n\n" +
                 "Open-source software licensed under the MIT License.\n" +
                 "Source code: $sourceUrl\n\n" +
                 "Scans only the local Wi-Fi/Ethernet network and does not require the Linux server."
@@ -506,5 +554,10 @@ class LanDashboardView(context: Context) : View(context) {
 
     private fun line(canvas: Canvas, x1: Float, y1: Float, x2: Float, y2: Float, alpha: Int = 65) {
         paint.color = Color.argb(alpha, 0, 255, 120); paint.strokeWidth = 1f; canvas.drawLine(x1, y1, x2, y2, paint)
+    }
+
+    companion object {
+        private const val RANGE_HISTORY_KEY = "range_history"
+        private const val MAX_SAVED_RANGES = 12
     }
 }

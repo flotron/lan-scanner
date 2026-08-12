@@ -70,7 +70,7 @@ class LanScanEngine(context: Context, private val onState: (ScanState) -> Unit) 
             val range = if (cidrOverride.isNullOrBlank()) currentRange() else parseRange(cidrOverride)
             if (range == null) return@execute publish(ScanState(message = "CONNECT TO WI-FI OR ETHERNET"))
             publish(ScanState(range.cidr, true, 0, message = "ACTIVATING NETWORK NEIGHBORS"))
-            vendors.refresh()
+            if (BuildConfig.MAC_DISCOVERY_ENABLED) vendors.refresh()
             val responsive = ConcurrentHashMap<String, Long>()
             val pool = Executors.newFixedThreadPool(48)
             range.hosts.forEachIndexed { index, ip -> pool.execute {
@@ -83,11 +83,27 @@ class LanScanEngine(context: Context, private val onState: (ScanState) -> Unit) 
             pool.shutdown(); pool.awaitTermination(35, TimeUnit.SECONDS)
             if (cancelled) return@execute
             Thread.sleep(500)
+            if (!BuildConfig.MAC_DISCOVERY_ENABLED) {
+                publish(state.copy(progress = 78, message = "RESOLVING HOSTS — MAC DISABLED"))
+                return@execute publishLayer3Results(
+                    range,
+                    responsive,
+                    "Unavailable",
+                    "MAC discovery disabled",
+                    "${responsive.size} HOSTS — MAC UNAVAILABLE IN THIS DISTRIBUTION"
+                )
+            }
             val localLayer2Hosts = currentRange()?.hosts?.toHashSet().orEmpty()
             val directSubnet = range.hosts.any { it in localLayer2Hosts }
             if (!directSubnet) {
                 publish(state.copy(progress = 78, message = "ROUTED VLAN — RESOLVING HOSTS"))
-                return@execute publishRoutedResults(range, responsive)
+                return@execute publishLayer3Results(
+                    range,
+                    responsive,
+                    "Unavailable (routed)",
+                    "Layer 3 route",
+                    "${responsive.size} ROUTED HOSTS — MAC REQUIRES SAME VLAN"
+                )
             }
             publish(state.copy(progress = 78, message = "READING IP / MAC NEIGHBOR TABLE"))
             val arp = readArpTable(range)
@@ -126,7 +142,13 @@ class LanScanEngine(context: Context, private val onState: (ScanState) -> Unit) 
         }
     }
 
-    private fun publishRoutedResults(range: NetworkRange, responsive: Map<String, Long>) {
+    private fun publishLayer3Results(
+        range: NetworkRange,
+        responsive: Map<String, Long>,
+        macLabel: String,
+        vendorLabel: String,
+        resultMessage: String
+    ) {
         val previous = history.load()
         val now = System.currentTimeMillis()
         val onlineByIp = responsive.mapValues { (ip, latency) ->
@@ -134,8 +156,8 @@ class LanScanEngine(context: Context, private val onState: (ScanState) -> Unit) 
             val resolvedName = resolveName(ip)
             LanDevice(
                 ip = ip,
-                mac = "Unavailable (routed)",
-                vendor = "Layer 3 route",
+                mac = macLabel,
+                vendor = vendorLabel,
                 name = resolvedName.takeUnless { it == "Unknown host" } ?: old?.name ?: "Unknown host",
                 online = true,
                 latencyMs = latency,
@@ -145,8 +167,8 @@ class LanScanEngine(context: Context, private val onState: (ScanState) -> Unit) 
         val allAddresses = range.hosts.map { ip ->
             onlineByIp[ip] ?: LanDevice(
                 ip = ip,
-                mac = "Unavailable (routed)",
-                vendor = "Layer 3 route",
+                mac = macLabel,
+                vendor = vendorLabel,
                 name = previous[ip]?.name ?: "No client recorded",
                 online = false,
                 latencyMs = null,
@@ -158,7 +180,7 @@ class LanScanEngine(context: Context, private val onState: (ScanState) -> Unit) 
             false,
             100,
             allAddresses,
-            "${responsive.size} ROUTED HOSTS — MAC REQUIRES SAME VLAN",
+            resultMessage,
             true
         ))
     }

@@ -13,8 +13,10 @@ The device table can be sorted by status, last-known name, IP address, MAC addre
 The repository also contains a fully native, stand-alone Android scanner in [`android/`](android/). It does not connect to the Linux service or require a router/controller integration. The interface retains the same dark phosphor-green console appearance and includes:
 
 - automatic local-subnet detection plus an editable `/24` to `/30` CIDR;
+- a persistent most-recently-used history of up to 12 successfully scanned subnets;
 - verified IPv4/MAC pairs, offline history, local IEEE vendor lookup, hostname and latency;
 - sorting, all/online/offline status filters, TCP port inspection and user-initiated full scans;
+- `ONLINE ONLY` as the initial host filter, with all/offline views available from the same control;
 - up to 16 immediate-watch targets pinged once per second, with grouped result cells that clear and restart after filling the row.
 - inertial touch scrolling, animated code rain matching the Linux interface, three-state status filtering and a built-in About/source panel;
 - a radar/router adaptive launcher icon, the bundled open-source Share Tech Mono typeface and phosphor glow effects matching the Linux interface.
@@ -25,9 +27,11 @@ MAC address visibility is a hard requirement for this build. Android removed acc
 
 When a manually entered range belongs to another routed VLAN, the Android app switches to Layer-3 discovery instead of reporting an ARP permission error. It still reports reachable IPs, names, latency, online/offline state and TCP ports, but explicitly marks MAC and manufacturer as unavailable. This is a network boundary rather than an Android permission issue: ARP/MAC information does not cross a router. Real client MAC addresses on another VLAN require data from that VLAN's router, switch or controller.
 
+There is only one Android application and one update path. MAC discovery is centralized behind the `BuildConfig.MAC_DISCOVERY_ENABLED` capability and remains enabled in current releases. If a future Google Play migration forces removal of legacy neighbor-table access, the same application can be built with `-PmacDiscoveryEnabled=false` while retaining IP discovery, hostname resolution, latency, status, watch mode and port inspection; no parallel edition or separate package is planned.
+
 On devices that block `/proc/net/arp` (including recent Samsung firmware), the app falls back to a native read-only netlink neighbor-table dump and then to `SIOCGARP`. Automatic range detection accepts only RFC1918 addresses on Wi-Fi or Ethernet; cellular, CGNAT, VPN and Tailscale interfaces are never selected for a LAN scan.
 
-Every Android change is compiled by GitHub Actions. Open the latest `Android APK` workflow run, download the `lan-scanner-android` artifact and sideload `app-debug.apk`. GitHub release builds also attach it as `lan-scanner-android.apk`. Google Play distribution is intentionally not supported because raising the target SDK would remove the required ARP/MAC behavior.
+Every Android change is compiled by GitHub Actions and published as the signed `lan-scanner-android.apk`. Current releases remain sideload-only because their legacy target preserves required ARP/MAC behavior; the codebase is prepared to disable that capability if a future Google Play migration becomes necessary.
 
 **Permanent public download:** [Download the latest Android APK](https://github.com/flotron/lan-scanner/releases/latest/download/lan-scanner-android.apk). No GitHub account is required. Versioned APKs remain available on the [Releases page](https://github.com/flotron/lan-scanner/releases).
 
