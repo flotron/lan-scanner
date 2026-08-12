@@ -31,6 +31,10 @@ android {
     }
 
     buildFeatures { buildConfig = true }
+    lint {
+        // This sideload-only build intentionally targets API 31 to retain local ARP/MAC access.
+        disable += "ExpiredTargetSdkVersion"
+    }
     signingConfigs {
         if (!lanScannerKeystorePath.isNullOrBlank()) {
             create("stableRelease") {
