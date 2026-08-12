@@ -1,0 +1,29 @@
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+
+android {
+    namespace = "com.flotron.lanscanner"
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = "com.flotron.lanscanner"
+        minSdk = 24
+        targetSdk = 31
+        versionCode = 1
+        versionName = "0.1.0"
+    }
+
+    buildFeatures { buildConfig = true }
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+    }
+}
+
+dependencies {
+    implementation("org.jetbrains.kotlin:kotlin-stdlib:2.0.21")
+}

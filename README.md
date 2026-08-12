@@ -8,6 +8,19 @@ The full subnet stays visible: offline addresses are dimmed and retain the last 
 
 The device table can be sorted by status, last-known name, IP address, MAC address, or manufacturer. Its status filter can show all clients, online clients only, or offline addresses only.
 
+## Android app (preview)
+
+The repository also contains a fully native, stand-alone Android scanner in [`android/`](android/). It does not connect to the Linux service or require a router/controller integration. The interface retains the same dark phosphor-green console appearance and includes:
+
+- automatic local-subnet detection plus an editable `/24` to `/30` CIDR;
+- verified IPv4/MAC pairs, offline history, local IEEE vendor lookup, hostname and latency;
+- sorting, an online-only filter, TCP port inspection and automatic low-frequency rescans;
+- up to 16 immediate-watch targets pinged once per second, with grouped result cells that clear and restart after filling the row.
+
+MAC address visibility is a hard requirement for this build. Android removed access to the kernel ARP table for newer target SDKs, so this sideload edition deliberately targets Android API 31 while compiling with current tooling. It reads `/proc/net/arp`; if a phone vendor blocks that file anyway, the app reports `MAC ACCESS REQUIRED` and refuses to present misleading partial results. It cannot discover MAC addresses across a routed VLAN.
+
+Every Android change is compiled by GitHub Actions. Open the latest `Android APK` workflow run, download the `lan-scanner-android` artifact and sideload `app-debug.apk`. GitHub release builds also attach it as `lan-scanner-android.apk`. Google Play distribution is intentionally not supported because raising the target SDK would remove the required ARP/MAC behavior.
+
 ## Immediate watch
 
 Select the `WATCH` checkbox beside the few addresses you are working on. They are grouped in one panel and pinged concurrently once per second, independently from normal network discovery. Every target shows its immediate state, latency, check time, and the last 18 replies. A single missed reply is shown immediately in this panel; the conservative three-check rule continues to apply only to the general device list. Selections are kept in the browser and the endpoint is capped at 32 addresses to prevent accidental load.
