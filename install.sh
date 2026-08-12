@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ ${EUID:-$(id -u)} -ne 0 ]]; then echo "Run with sudo: sudo ./install.sh"; exit 1; fi
+if [[ ${EUID:-$(id -u)} -ne 0 && ${LANSCAN_ALLOW_NON_SYSTEMD:-0} != 1 ]]; then echo "Run with sudo: sudo ./install.sh"; exit 1; fi
 APP_DIR="${LANSCAN_APP_DIR:-/opt/lan-scanner}"
 DATA_DIR="${LANSCAN_DATA_DIR:-/var/lib/lan-scanner}"
 SYSTEMD_DIR="${LANSCAN_SYSTEMD_DIR:-/etc/systemd/system}"
