@@ -166,9 +166,16 @@ class LanScanEngine(context: Context, private val onState: (ScanState) -> Unit) 
         }.getOrNull() else null
         if (!fromProc.isNullOrEmpty()) return fromProc
         if (!NativeArp.available) return if (fromProc != null) emptyMap() else null
-        val nativeEntries = range.hosts.mapNotNull { ip ->
-            NativeArp.lookup(ip, range.interfaceName)?.let { ip to it }
-        }.toMap()
+        val allowed = range.hosts.toHashSet()
+        val nativeEntries = NativeArp.dump(range.interfaceName)
+            ?.filterKeys { it in allowed }
+            .orEmpty()
+            .ifEmpty {
+                // Older kernels without a neighbor dump still support individual ARP queries.
+                range.hosts.mapNotNull { ip ->
+                    NativeArp.lookup(ip, range.interfaceName)?.let { ip to it }
+                }.toMap()
+            }
         return nativeEntries.takeIf { it.isNotEmpty() || fromProc != null }
     }
 

@@ -19,7 +19,7 @@ The repository also contains a fully native, stand-alone Android scanner in [`an
 
 MAC address visibility is a hard requirement for this build. Android removed access to the kernel ARP table for newer target SDKs, so this sideload edition deliberately targets Android API 31 while compiling with current tooling. It reads `/proc/net/arp`; if a phone vendor blocks that file anyway, the app reports `MAC ACCESS REQUIRED` and refuses to present misleading partial results. It cannot discover MAC addresses across a routed VLAN.
 
-On devices that block `/proc/net/arp` (including recent Samsung firmware), the app falls back to a native read-only `SIOCGARP` kernel query. Automatic range detection accepts only RFC1918 addresses on Wi-Fi or Ethernet; cellular, CGNAT, VPN and Tailscale interfaces are never selected for a LAN scan.
+On devices that block `/proc/net/arp` (including recent Samsung firmware), the app falls back to a native read-only netlink neighbor-table dump and then to `SIOCGARP`. Automatic range detection accepts only RFC1918 addresses on Wi-Fi or Ethernet; cellular, CGNAT, VPN and Tailscale interfaces are never selected for a LAN scan.
 
 Every Android change is compiled by GitHub Actions. Open the latest `Android APK` workflow run, download the `lan-scanner-android` artifact and sideload `app-debug.apk`. GitHub release builds also attach it as `lan-scanner-android.apk`. Google Play distribution is intentionally not supported because raising the target SDK would remove the required ARP/MAC behavior.
 
