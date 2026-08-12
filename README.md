@@ -23,6 +23,8 @@ After a full scan, every usable address in the selected subnet is listed. Addres
 
 MAC address visibility is a hard requirement for this build. Android removed access to the kernel ARP table for newer target SDKs, so this sideload edition deliberately targets Android API 31 while compiling with current tooling. It reads `/proc/net/arp`; if a phone vendor blocks that file anyway, the app reports `MAC ACCESS REQUIRED` and refuses to present misleading partial results. It cannot discover MAC addresses across a routed VLAN.
 
+When a manually entered range belongs to another routed VLAN, the Android app switches to Layer-3 discovery instead of reporting an ARP permission error. It still reports reachable IPs, names, latency, online/offline state and TCP ports, but explicitly marks MAC and manufacturer as unavailable. This is a network boundary rather than an Android permission issue: ARP/MAC information does not cross a router. Real client MAC addresses on another VLAN require data from that VLAN's router, switch or controller.
+
 On devices that block `/proc/net/arp` (including recent Samsung firmware), the app falls back to a native read-only netlink neighbor-table dump and then to `SIOCGARP`. Automatic range detection accepts only RFC1918 addresses on Wi-Fi or Ethernet; cellular, CGNAT, VPN and Tailscale interfaces are never selected for a LAN scan.
 
 Every Android change is compiled by GitHub Actions. Open the latest `Android APK` workflow run, download the `lan-scanner-android` artifact and sideload `app-debug.apk`. GitHub release builds also attach it as `lan-scanner-android.apk`. Google Play distribution is intentionally not supported because raising the target SDK would remove the required ARP/MAC behavior.

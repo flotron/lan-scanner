@@ -83,6 +83,12 @@ class LanScanEngine(context: Context, private val onState: (ScanState) -> Unit) 
             pool.shutdown(); pool.awaitTermination(35, TimeUnit.SECONDS)
             if (cancelled) return@execute
             Thread.sleep(500)
+            val localLayer2Hosts = currentRange()?.hosts?.toHashSet().orEmpty()
+            val directSubnet = range.hosts.any { it in localLayer2Hosts }
+            if (!directSubnet) {
+                publish(state.copy(progress = 78, message = "ROUTED VLAN — RESOLVING HOSTS"))
+                return@execute publishRoutedResults(range, responsive)
+            }
             publish(state.copy(progress = 78, message = "READING IP / MAC NEIGHBOR TABLE"))
             val arp = readArpTable(range)
             if (arp == null) {
@@ -118,6 +124,43 @@ class LanScanEngine(context: Context, private val onState: (ScanState) -> Unit) 
             publish(ScanState(range.cidr, false, 100, allAddresses,
                 "${found.size} CLIENTS WITH VERIFIED MAC", true))
         }
+    }
+
+    private fun publishRoutedResults(range: NetworkRange, responsive: Map<String, Long>) {
+        val previous = history.load()
+        val now = System.currentTimeMillis()
+        val onlineByIp = responsive.mapValues { (ip, latency) ->
+            val old = previous[ip]
+            val resolvedName = resolveName(ip)
+            LanDevice(
+                ip = ip,
+                mac = "Unavailable (routed)",
+                vendor = "Layer 3 route",
+                name = resolvedName.takeUnless { it == "Unknown host" } ?: old?.name ?: "Unknown host",
+                online = true,
+                latencyMs = latency,
+                lastSeen = now
+            )
+        }
+        val allAddresses = range.hosts.map { ip ->
+            onlineByIp[ip] ?: LanDevice(
+                ip = ip,
+                mac = "Unavailable (routed)",
+                vendor = "Layer 3 route",
+                name = previous[ip]?.name ?: "No client recorded",
+                online = false,
+                latencyMs = null,
+                lastSeen = previous[ip]?.lastSeen ?: 0L
+            )
+        }
+        publish(ScanState(
+            range.cidr,
+            false,
+            100,
+            allAddresses,
+            "${responsive.size} ROUTED HOSTS — MAC REQUIRES SAME VLAN",
+            true
+        ))
     }
 
     fun cancel() { cancelled = true }
