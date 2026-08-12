@@ -48,9 +48,9 @@ jobs:
               --title "LAN Scanner Android ${VERSION}" \
               --notes "Standalone Android LAN scanner. Download and install lan-scanner-android.apk."
           fi
-          gh release upload "$TAG" \
-            android/app/build/outputs/apk/debug/app-debug.apk#lan-scanner-android.apk \
-            --clobber
+          cp android/app/build/outputs/apk/debug/app-debug.apk lan-scanner-android.apk
+          gh release upload "$TAG" lan-scanner-android.apk --clobber
+          gh release delete-asset "$TAG" app-debug.apk --yes >/dev/null 2>&1 || true
       - name: Attach APK to GitHub release
         if: github.event_name == 'release'
         env:
