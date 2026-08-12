@@ -63,7 +63,8 @@ class LanDashboardView(context: Context) : View(context) {
         }
         if (discoveryStarted) return
         discoveryStarted = true
-        startAutoScan()
+        state = state.copy(message = "READY — TAP INITIATE SCAN")
+        invalidate()
     }
 
     private fun updateState(value: ScanState) {
@@ -299,15 +300,6 @@ class LanDashboardView(context: Context) : View(context) {
                 handler.postDelayed(this, 1000)
             }
         })
-    }
-
-    private fun startAutoScan() {
-        handler.postDelayed(object : Runnable {
-            override fun run() {
-                if (!state.scanning) engine.scan(customRange)
-                handler.postDelayed(this, 15_000)
-            }
-        }, 750)
     }
 
     private fun showRangeDialog() {

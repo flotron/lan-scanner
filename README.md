@@ -14,7 +14,7 @@ The repository also contains a fully native, stand-alone Android scanner in [`an
 
 - automatic local-subnet detection plus an editable `/24` to `/30` CIDR;
 - verified IPv4/MAC pairs, offline history, local IEEE vendor lookup, hostname and latency;
-- sorting, an online-only filter, TCP port inspection and automatic low-frequency rescans;
+- sorting, an online-only filter, TCP port inspection and user-initiated full scans;
 - up to 16 immediate-watch targets pinged once per second, with grouped result cells that clear and restart after filling the row.
 
 MAC address visibility is a hard requirement for this build. Android removed access to the kernel ARP table for newer target SDKs, so this sideload edition deliberately targets Android API 31 while compiling with current tooling. It reads `/proc/net/arp`; if a phone vendor blocks that file anyway, the app reports `MAC ACCESS REQUIRED` and refuses to present misleading partial results. It cannot discover MAC addresses across a routed VLAN.
