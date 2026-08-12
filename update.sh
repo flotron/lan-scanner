@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+if [[ ${EUID:-$(id -u)} -ne 0 && ${LANSCAN_ALLOW_NON_SYSTEMD:-0} != 1 ]]; then
     echo "Run with sudo: sudo /opt/lan-scanner/update.sh"
     exit 1
 fi
