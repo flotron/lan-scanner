@@ -42,7 +42,7 @@ jobs:
           echo "LANSCANNER_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
       - name: Build signed sideload APK
         working-directory: android
-        run: gradle --no-daemon assembleRelease
+        run: gradle --no-daemon testReleaseUnitTest lintRelease assembleRelease
       - name: Verify APK signature
         run: |
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"

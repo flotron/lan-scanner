@@ -14,8 +14,8 @@ android {
         applicationId = "com.flotron.lanscanner"
         minSdk = 29
         targetSdk = 31
-        versionCode = 11
-        versionName = "0.2.4"
+        versionCode = 12
+        versionName = "0.2.5"
         // One application, one update path. Set false only if a future Play migration
         // requires removal of local ARP/netlink MAC discovery.
         buildConfigField("boolean", "MAC_DISCOVERY_ENABLED", macDiscoveryEnabled.get())
@@ -59,5 +59,6 @@ android {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
     implementation("org.jetbrains.kotlin:kotlin-stdlib:2.0.21")
 }

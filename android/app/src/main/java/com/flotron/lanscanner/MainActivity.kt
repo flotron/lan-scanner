@@ -37,6 +37,21 @@ class MainActivity : Activity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        dashboard.resume()
+    }
+
+    override fun onPause() {
+        dashboard.pause()
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        dashboard.close()
+        super.onDestroy()
+    }
+
     companion object {
         private const val LOCATION_PERMISSION_REQUEST = 1201
     }

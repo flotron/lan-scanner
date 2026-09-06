@@ -26,6 +26,7 @@ import android.widget.TextView
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.random.Random
@@ -35,7 +36,6 @@ class LanDashboardView(context: Context) : View(context) {
     private val pale = Color.rgb(218, 255, 230)
     private val dim = Color.rgb(103, 157, 121)
     private val red = Color.rgb(255, 76, 91)
-    private val panel = Color.rgb(3, 22, 12)
     private val matrixTypeface = resources.getFont(R.font.share_tech_mono)
     private val matrixBold = Typeface.create(matrixTypeface, Typeface.BOLD)
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = matrixTypeface }
@@ -68,13 +68,20 @@ class LanDashboardView(context: Context) : View(context) {
     private var selected: LanDevice? = null
     private var detailPorts: List<Int>? = null
     private var detailRect = RectF()
-    private var lastScanStarted = 0L
+    private var lastScanFinished = 0L
+    private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+    private var active = false
+    private var disposed = false
+    private var detailRequest = 0
+    private val watchWorkers = Executors.newFixedThreadPool(16)
+    private var visibleDevices = emptyList<LanDevice>()
     private var discoveryStarted = false
     private val density = resources.displayMetrics.density
     private var rainDrops = FloatArray(0)
     private val rainGlyphs = "01アイウエオカキクケコサシスセソタチツテトナニヌネノ"
     private val rainTicker = object : Runnable {
         override fun run() {
+            if (!active || disposed) return
             if (rainDrops.isNotEmpty()) {
                 val rows = max(1f, height / (18f * density))
                 rainDrops.indices.forEach { index ->
@@ -91,17 +98,18 @@ class LanDashboardView(context: Context) : View(context) {
         setBackgroundColor(Color.rgb(2, 8, 5))
         setLayerType(LAYER_TYPE_SOFTWARE, null)
         isFocusable = true
-        startWatchLoop()
     }
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        handler.removeCallbacks(rainTicker)
-        handler.post(rainTicker)
+        if (active) {
+            handler.removeCallbacks(rainTicker)
+            handler.post(rainTicker)
+        }
     }
 
     override fun onDetachedFromWindow() {
-        handler.removeCallbacks(rainTicker)
+        pause()
         velocityTracker?.recycle()
         velocityTracker = null
         super.onDetachedFromWindow()
@@ -127,9 +135,11 @@ class LanDashboardView(context: Context) : View(context) {
     }
 
     private fun updateState(value: ScanState) {
+        if (disposed) return
         state = value
+        refreshVisibleDevices()
         if (value.scanning && value.progress == 0 && value.subnet.contains('/')) rememberRange(value.subnet)
-        if (!value.scanning && value.progress == 100) lastScanStarted = System.currentTimeMillis()
+        if (!value.scanning && value.progress == 100 && value.macAccessAvailable) lastScanFinished = System.currentTimeMillis()
         invalidate()
     }
 
@@ -147,6 +157,7 @@ class LanDashboardView(context: Context) : View(context) {
         y = drawStats(canvas, pad, y + 14f * density)
         y = drawDevices(canvas, pad, y + 14f * density)
         contentHeight = y + 40f * density
+        scrollYValue = scrollYValue.coerceIn(0f, max(0f, contentHeight - height))
         selected?.let { drawDetails(canvas, it) }
         canvas.restore()
     }
@@ -248,7 +259,7 @@ class LanDashboardView(context: Context) : View(context) {
             if (BuildConfig.MAC_DISCOVERY_ENABLED) "VERIFIED MACS" else "MAC UNAVAILABLE"
         )
         stat(canvas, RectF(x, y + 75f * density, x + cardW, y + 142f * density), "${state.progress}%", "SCAN PROGRESS")
-        val lastScan = if (lastScanStarted == 0L) "NEVER" else SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(lastScanStarted))
+        val lastScan = if (lastScanFinished == 0L) "NEVER" else timeFormat.format(Date(lastScanFinished))
         stat(canvas, RectF(x + cardW + gap, y + 75f * density, width - x, y + 142f * density), lastScan, "LAST SCAN")
         return y + 142f * density
     }
@@ -276,16 +287,7 @@ class LanDashboardView(context: Context) : View(context) {
             text(canvas, if (state.scanning) "SCANNING..." else "TAP INITIATE SCAN", x + 14f * density, rowY + 25f * density, 10f, dim)
             return rowY + 60f * density
         }
-        val visible = state.devices
-            .filter { statusFilter == 0 || (statusFilter == 1 && it.online) || (statusFilter == 2 && !it.online) }
-            .let { devices -> when (sortMode) {
-                1 -> devices.sortedWith(compareByDescending<LanDevice> { it.online }.thenBy { ipNumeric(it.ip) })
-                2 -> devices.sortedBy { it.name.lowercase() }
-                3 -> devices.sortedBy { it.mac }
-                4 -> devices.sortedBy { it.vendor.lowercase() }
-                else -> devices.sortedBy { ipNumeric(it.ip) }
-            } }
-        visible.forEach { device ->
+        visibleDevices.forEach { device ->
             val rect = RectF(x, rowY, width - x, rowY + 105f * density)
             val onScreen = rect.bottom >= scrollYValue - 8f * density && rect.top <= scrollYValue + height + 8f * density
             if (onScreen) {
@@ -308,6 +310,18 @@ class LanDashboardView(context: Context) : View(context) {
             rowY += 113f * density
         }
         return rowY
+    }
+
+    private fun refreshVisibleDevices() {
+        visibleDevices = state.devices
+            .filter { statusFilter == 0 || (statusFilter == 1 && it.online) || (statusFilter == 2 && !it.online) }
+            .let { devices -> when (sortMode) {
+                1 -> devices.sortedWith(compareByDescending<LanDevice> { it.online }.thenBy { ipNumeric(it.ip) })
+                2 -> devices.sortedBy { it.name.lowercase() }
+                3 -> devices.sortedBy { it.mac }
+                4 -> devices.sortedBy { it.vendor.lowercase() }
+                else -> devices.sortedBy { ipNumeric(it.ip) }
+            } }
     }
 
     private fun drawDetails(canvas: Canvas, device: LanDevice) {
@@ -361,12 +375,12 @@ class LanDashboardView(context: Context) : View(context) {
                     return true
                 }
                 val x = event.x; val y = event.y + scrollYValue
-                if (selected != null) { selected = null; detailPorts = null; invalidate(); return true }
+                if (selected != null) { selected = null; detailPorts = null; detailRequest++; invalidate(); return true }
                 if (aboutRect.contains(x, y)) { showAboutDialog(); return true }
                 if (rangeRect.contains(x, y)) { showRangeDialog(); return true }
                 if (scanRect.contains(x, y)) { displayedRange = engine.currentRange(); engine.scan(customRange); return true }
-                if (filterRect.contains(x, y)) { statusFilter = (statusFilter + 1) % 3; invalidate(); return true }
-                if (sortRect.contains(x, y)) { sortMode = (sortMode + 1) % 5; invalidate(); return true }
+                if (filterRect.contains(x, y)) { statusFilter = (statusFilter + 1) % 3; refreshVisibleDevices(); scrollYValue = 0f; invalidate(); return true }
+                if (sortRect.contains(x, y)) { sortMode = (sortMode + 1) % 5; refreshVisibleDevices(); invalidate(); return true }
                 watchRects.firstOrNull { it.first.contains(x, y) }?.let { (_, device) ->
                     if (device.ip in watched) {
                         watched.remove(device.ip); watchHistory.remove(device.ip)
@@ -374,7 +388,12 @@ class LanDashboardView(context: Context) : View(context) {
                     invalidate(); return true
                 }
                 rowRects.firstOrNull { it.first.contains(x, y) }?.let { (_, device) ->
-                    selected = device; detailPorts = null; engine.scanPorts(device.ip) { detailPorts = it; invalidate() }; invalidate(); return true
+                    selected = device; detailPorts = null
+                    val request = ++detailRequest
+                    engine.scanPorts(device.ip) {
+                        if (request == detailRequest && selected?.ip == device.ip) { detailPorts = it; invalidate() }
+                    }
+                    invalidate(); return true
                 }
             }
             MotionEvent.ACTION_CANCEL -> {
@@ -392,27 +411,57 @@ class LanDashboardView(context: Context) : View(context) {
         }
     }
 
-    private fun startWatchLoop() {
-        handler.post(object : Runnable {
-            override fun run() {
-                state.devices.filter { it.ip in watched }.forEach { device ->
-                    if (!watchInFlight.add(device.ip)) return@forEach
-                    Thread { val latency = engine.probe(device.ip); handler.post {
+    fun resume() {
+        if (disposed || active) return
+        active = true
+        displayedRange = engine.currentRange()
+        handler.post(rainTicker)
+        handler.post(watchTicker)
+        invalidate()
+    }
+
+    fun pause() {
+        active = false
+        handler.removeCallbacks(rainTicker)
+        handler.removeCallbacks(watchTicker)
+        scroller.abortAnimation()
+    }
+
+    fun close() {
+        pause()
+        disposed = true
+        detailRequest++
+        watchWorkers.shutdownNow()
+        engine.close()
+        handler.removeCallbacksAndMessages(null)
+    }
+
+    private val watchTicker = object : Runnable {
+        override fun run() {
+            if (!active || disposed) return
+            state.devices.filter { it.ip in watched }.forEach { device ->
+                if (!watchInFlight.add(device.ip)) return@forEach
+                watchWorkers.execute {
+                    val latency = runCatching { engine.probe(device.ip) }.getOrNull()
+                    handler.post {
                         watchInFlight.remove(device.ip)
-                        watchResults[device.ip] = (latency != null) to latency
-                        val history = watchHistory.getOrPut(device.ip) { mutableListOf() }
-                        val slots = max(8, ((width - 64f * density) / (13f * density)).toInt())
-                        if (history.size >= slots) history.clear()
-                        history += latency != null
-                        invalidate()
-                    } }.start()
+                        if (active && !disposed && device.ip in watched) {
+                            watchResults[device.ip] = (latency != null) to latency
+                            val history = watchHistory.getOrPut(device.ip) { mutableListOf() }
+                            val slots = max(8, ((width - 64f * density) / (13f * density)).toInt())
+                            if (history.size >= slots) history.clear()
+                            history += latency != null
+                            invalidate()
+                        }
+                    }
                 }
-                handler.postDelayed(this, 1000)
             }
-        })
+            handler.postDelayed(this, 1000)
+        }
     }
 
     private fun showRangeDialog() {
+        if (state.scanning) return
         val input = EditText(context).apply {
             setText(customRange ?: displayedRange?.cidr.orEmpty())
             setTextColor(pale); setHintTextColor(dim); setBackgroundColor(Color.rgb(3, 22, 12))
@@ -550,13 +599,14 @@ class LanDashboardView(context: Context) : View(context) {
         canvas.drawCircle(x, y, 3f * density, paint)
     }
 
-    private fun validMac(mac: String): Boolean = mac.matches(Regex("(?i)([0-9a-f]{2}:){5}[0-9a-f]{2}"))
+    private fun validMac(mac: String): Boolean = MAC_PATTERN.matches(mac)
 
     private fun line(canvas: Canvas, x1: Float, y1: Float, x2: Float, y2: Float, alpha: Int = 65) {
         paint.color = Color.argb(alpha, 0, 255, 120); paint.strokeWidth = 1f; canvas.drawLine(x1, y1, x2, y2, paint)
     }
 
     companion object {
+        private val MAC_PATTERN = Regex("(?i)([0-9a-f]{2}:){5}[0-9a-f]{2}")
         private const val RANGE_HISTORY_KEY = "range_history"
         private const val MAX_SAVED_RANGES = 12
     }

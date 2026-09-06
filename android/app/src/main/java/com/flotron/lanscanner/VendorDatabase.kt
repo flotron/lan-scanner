@@ -6,7 +6,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
 
-class VendorDatabase(private val context: Context) {
+class VendorDatabase(context: Context) {
     private val vendors = ConcurrentHashMap<String, String>()
     private val preferences = context.getSharedPreferences("vendor_db", Context.MODE_PRIVATE)
 
@@ -47,23 +47,27 @@ class VendorDatabase(private val context: Context) {
             connection.connectTimeout = 8_000
             connection.readTimeout = 15_000
             connection.setRequestProperty("User-Agent", "LAN-Scanner-Android")
-            val updated = JSONObject()
-            connection.inputStream.bufferedReader().useLines { lines ->
-                lines.drop(1).forEach { line ->
-                    val fields = parseCsv(line)
-                    if (fields.size >= 3) {
-                        val prefix = fields[1].replace("-", "").uppercase()
-                        if (prefix.length >= 6) updated.put(prefix.take(6), fields[2])
+            try {
+                val updated = JSONObject()
+                connection.inputStream.bufferedReader().useLines { lines ->
+                    lines.drop(1).forEach { line ->
+                        val fields = parseCsv(line)
+                        if (fields.size >= 3) {
+                            val prefix = fields[1].replace("-", "").uppercase()
+                            if (prefix.length >= 6) updated.put(prefix.take(6), fields[2])
+                        }
                     }
                 }
-            }
-            if (updated.length() > 1_000) {
-                preferences.edit()
-                    .putString("vendors", updated.toString())
-                    .putLong("last_success", System.currentTimeMillis())
-                    .apply()
-                vendors.clear()
-                loadJson(updated.toString())
+                if (updated.length() > 1_000) {
+                    preferences.edit()
+                        .putString("vendors", updated.toString())
+                        .putLong("last_success", System.currentTimeMillis())
+                        .apply()
+                    vendors.clear()
+                    loadJson(updated.toString())
+                }
+            } finally {
+                connection.disconnect()
             }
         }
     }

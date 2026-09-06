@@ -25,7 +25,8 @@ data class NetworkRange(
     val prefix: Int,
     val hosts: List<String>,
     val networkAddress: String,
-    val interfaceName: String
+    val interfaceName: String,
+    val localPrefix: Int = prefix
 ) {
     val cidr: String get() = "$networkAddress/$prefix"
 }

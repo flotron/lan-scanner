@@ -57,6 +57,12 @@ Java_com_flotron_lanscanner_NativeArp_dumpNative(
         return env->NewStringUTF(error);
     }
 
+    timeval timeout{2, 0};
+    if (setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
+        close(socket_fd);
+        return env->NewStringUTF("!NETLINK TIMEOUT SETUP FAILED");
+    }
+
     struct {
         nlmsghdr header;
         ndmsg neighbor;
@@ -80,8 +86,9 @@ Java_com_flotron_lanscanner_NativeArp_dumpNative(
 
     std::string result;
     bool complete = false;
-    while (!complete) {
-        char buffer[16384];
+    int packets = 0;
+    while (!complete && packets++ < 64) {
+        alignas(nlmsghdr) char buffer[16384];
         const ssize_t received = recv(socket_fd, buffer, sizeof(buffer), 0);
         if (received < 0) {
             char error[64]; std::snprintf(error, sizeof(error), "!NETLINK RECEIVE ERROR %d", errno);
@@ -93,7 +100,8 @@ Java_com_flotron_lanscanner_NativeArp_dumpNative(
              NLMSG_OK(header, remaining); header = NLMSG_NEXT(header, remaining)) {
             if (header->nlmsg_type == NLMSG_DONE) { complete = true; break; }
             if (header->nlmsg_type == NLMSG_ERROR) { complete = true; break; }
-            if (header->nlmsg_type != RTM_NEWNEIGH) continue;
+            if (header->nlmsg_type != RTM_NEWNEIGH ||
+                header->nlmsg_len < NLMSG_LENGTH(sizeof(ndmsg))) continue;
 
             auto *neighbor = reinterpret_cast<ndmsg *>(NLMSG_DATA(header));
             if (neighbor->ndm_family != AF_INET ||
