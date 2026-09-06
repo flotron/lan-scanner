@@ -142,7 +142,7 @@ class LanScanEngine(context: Context, private val onState: (ScanState) -> Unit) 
     }
 
     val previous = history.load()
-    val names = resolveNames(arp.keys.filter { it in responsive })
+    val names = resolveNames(arp.keys.filter { responsive.containsKey(it) })
     val found = arp.filterKeys { it in range.hosts }.map { (ip, mac) ->
         val latency = responsive[ip]
         val old = previous[ip]?.takeIf { it.mac.equals(mac, ignoreCase = true) }
