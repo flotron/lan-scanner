@@ -1,4 +1,4 @@
-document.head.insertAdjacentHTML('beforeend','<link rel="stylesheet" href="/type.css?v=20260930-1">');
+document.head.insertAdjacentHTML('beforeend','<link rel="stylesheet" href="/type.css?v=20260930-2">');
 const $=s=>document.querySelector(s), rows=$('#rows');let devices=[],started=0,timer,sortKey='ip',sortDirection=1,watchTimer,watchBusy=false,watchStarted=false,activeSubnet='',pollBusy=false;
 const watched=new Set(JSON.parse(localStorage.getItem('lanScannerWatched')||'[]')),watchState=new Map(),watchHistory=new Map();
 async function json(url,opt){const r=await fetch(url,opt);const d=await r.json();if(!r.ok)throw Error(d.error||r.statusText);return d}
@@ -22,7 +22,9 @@ async function poll(){
     $('#iface').disabled=s.running||s.stopping;
     $('#progress').classList.toggle('hidden',!s.running);
     $('#progressText').textContent=s.message||'SCANNING NETWORK…';
-    $('#scanMessage').textContent=s.error?`ERROR: ${s.error}`:(s.message||'');
+    $('#scanMessage').textContent=s.error?`ERROR: ${s.error}`:(s.warning||s.message||'');
+    $('#scanDiagnostics').hidden=!s.diagnostic;
+    $('#scanDiagnosticText').textContent=s.diagnostic||'';
     $('#percent').textContent=s.progress+'%';$('.track i').style.width=s.progress+'%';
     if(activeSubnet&&s.subnet&&activeSubnet!==s.subnet)clearWatch();
     activeSubnet=s.subnet||activeSubnet;
@@ -30,7 +32,7 @@ async function poll(){
     if(watched.size&&!watchStarted){watchStarted=true;pollWatch()}
     $('#updated').textContent=s.last_presence?new Date(s.last_presence*1000).toLocaleTimeString():'NEVER';
     $('#elapsed').textContent=s.running?Math.round(Date.now()/1000-s.started)+'s':(s.started&&s.finished?(s.finished-s.started)+'s':'—');
-    $('#total').textContent=s.devices.length;
+    $('#total').textContent=s.scanned??s.devices.length;
     delay=s.running||s.stopping?500:3000;
   }catch(e){notice(e.message);delay=5000}
   finally{pollBusy=false;clearTimeout(timer);timer=setTimeout(poll,delay)}
@@ -38,7 +40,7 @@ async function poll(){
 
 function ago(ts){if(!ts)return 'Never';const seconds=Math.max(0,Math.floor(Date.now()/1000-ts));if(seconds<60)return seconds+'s ago';if(seconds<3600)return Math.floor(seconds/60)+'m ago';if(seconds<86400)return Math.floor(seconds/3600)+'h ago';return new Date(ts*1000).toLocaleString()}
 function sortValue(d,key){if(key==='ip')return d.ip.split('.').reduce((n,x)=>n*256+Number(x),0);if(key==='status')return d.status==='online'?0:1;return String(d[key]||'').toLocaleLowerCase()}
-function render(){const q=$('#filter').value.toLowerCase(),status=$('#statusFilter').value,list=devices.filter(d=>(status==='all'||d.status===status)&&Object.values(d).some(v=>String(v).toLowerCase().includes(q))).sort((a,b)=>{const av=sortValue(a,sortKey),bv=sortValue(b,sortKey);return (typeof av==='number'?av-bv:av.localeCompare(bv,undefined,{numeric:true,sensitivity:'base'}))*sortDirection}),online=devices.filter(d=>d.status==='online').length;$('#online').textContent=online;rows.innerHTML=list.length?list.map(d=>{const on=d.status==='online',source=d.name_source?`<small class="name-source">IDENTIFIED VIA ${esc(d.name_source)}</small>`:'';return `<tr data-ip="${esc(d.ip)}" class="${on?'':'offline'}"><td><input class="watch-check" type="checkbox" data-watch-ip="${esc(d.ip)}" ${watched.has(d.ip)?'checked':''} aria-label="Watch ${esc(d.ip)} every second"></td><td><span class="status ${on?'':'offline-status'}">${on?'ONLINE':'OFFLINE'}</span></td><td>${esc(d.ip)}</td><td class="muted">${esc(d.mac||'Not recorded')}</td><td>${esc(d.name||(on?'Unknown host':'No client recorded'))}${!on&&d.name?'<small class="last-client">LAST REGISTERED CLIENT</small>':source}</td><td>${esc(d.manufacturer)}</td><td>${esc(ago(d.last_seen))}</td><td class="arrow">›</td></tr>`}).join(''):'<tr class="empty"><td colspan="8">NO MATCHING NODES</td></tr>';rows.querySelectorAll('tr[data-ip]').forEach(r=>r.onclick=()=>details(r.dataset.ip));rows.querySelectorAll('.watch-check').forEach(box=>box.onclick=e=>{e.stopPropagation();toggleWatch(box.dataset.watchIp,box.checked)})}
+function render(){const q=$('#filter').value.toLowerCase(),status=$('#statusFilter').value,list=devices.filter(d=>(status==='all'||d.status===status)&&Object.values(d).some(v=>String(v).toLowerCase().includes(q))).sort((a,b)=>{const av=sortValue(a,sortKey),bv=sortValue(b,sortKey);return (typeof av==='number'?av-bv:av.localeCompare(bv,undefined,{numeric:true,sensitivity:'base'}))*sortDirection}),online=devices.filter(d=>d.status==='online').length;$('#online').textContent=online;rows.innerHTML=list.length?list.map(d=>{const on=d.status==='online',source=d.name_source?`<small class="name-source">IDENTIFIED VIA ${esc(d.name_source)}</small>`:'';return `<tr data-ip="${esc(d.ip)}" class="${on?'':'offline'}"><td><input class="watch-check" type="checkbox" data-watch-ip="${esc(d.ip)}" ${watched.has(d.ip)?'checked':''} aria-label="Watch ${esc(d.ip)} every second"></td><td><span class="status ${on?'':'offline-status'}">${on?'ONLINE':d.status==='unknown'?'NOT VERIFIED':'OFFLINE'}</span></td><td>${esc(d.ip)}</td><td class="muted">${esc(d.mac||'Not recorded')}</td><td>${esc(d.name||(d.status==='unknown'?'Scan incomplete':on?'Unknown host':'No client recorded'))}${!on&&d.name?'<small class="last-client">LAST REGISTERED CLIENT</small>':source}</td><td>${esc(d.manufacturer)}</td><td>${esc(ago(d.last_seen))}</td><td class="arrow">›</td></tr>`}).join(''):'<tr class="empty"><td colspan="8">NO MATCHING NODES</td></tr>';rows.querySelectorAll('tr[data-ip]').forEach(r=>r.onclick=()=>details(r.dataset.ip));rows.querySelectorAll('.watch-check').forEach(box=>box.onclick=e=>{e.stopPropagation();toggleWatch(box.dataset.watchIp,box.checked)})}
 
 function saveWatched(){localStorage.setItem('lanScannerWatched',JSON.stringify([...watched]))}
 function toggleWatch(ip,enabled){if(enabled&&watched.size>=32){alert('Immediate watch supports up to 32 IP addresses.');render();return}enabled?watched.add(ip):watched.delete(ip);if(!enabled){watchState.delete(ip);watchHistory.delete(ip)}saveWatched();renderWatchPanel();render();if(watched.size&&!watchBusy){watchStarted=true;pollWatch()}}

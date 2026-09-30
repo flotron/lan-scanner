@@ -31,7 +31,7 @@ OFFLINE_CONFIRMATIONS = max(2, int(os.getenv("LANSCAN_OFFLINE_CONFIRMATIONS", "3
 OUI_FILES = (Path("/usr/share/nmap/nmap-mac-prefixes"), Path("/usr/share/ieee-data/oui.txt"))
 REQUIRED_COMMANDS = ("python3", "nmap", "ip", "ping", "curl", "tar", "systemctl", "systemd-run")
 OPTIONAL_COMMANDS = ("avahi-resolve-address", "nmblookup")
-state = {"running": False, "progress": 0, "subnet": "", "devices": [], "error": None, "started": None, "finished": None, "last_presence": None, "monitor_interval": 15, "stopping": False, "cancelled": False, "monitor_paused": False, "message": "READY"}
+state = {"running": False, "progress": 0, "subnet": "", "devices": [], "error": None, "started": None, "finished": None, "last_presence": None, "monitor_interval": 15, "stopping": False, "cancelled": False, "monitor_paused": False, "message": "READY", "diagnostic": "", "warning": "", "scanned": 0}
 lock = threading.Lock()
 viewer_seen = 0.0
 version_cache = {"latest_version": "", "checked_at": 0.0, "error": ""}
@@ -47,6 +47,9 @@ class ScanJob:
         self.subnet = subnet
         self.background = background
         self.cancel = threading.Event()
+        self.unverified = []
+        self.diagnostics = []
+        self.scanned = 0
 
 
 active_job = None
@@ -366,7 +369,7 @@ def save_history(history: dict[str, dict]) -> None:
     temporary.replace(HISTORY_FILE)
 
 
-def merged_device_list(subnet: str, online: list[dict]) -> list[dict]:
+def merged_device_list(subnet: str, online: list[dict], unverified=()) -> list[dict]:
     """Retain known clients and require repeated misses before marking offline."""
     network = ipaddress.ip_network(subnet)
     history = load_history()
@@ -380,6 +383,13 @@ def merged_device_list(subnet: str, online: list[dict]) -> list[dict]:
         if ip in current:
             device = {**previous, **current[ip], "subnet": subnet, "status": "online", "last_seen": now, "missed_checks": 0}
             history[ip] = device
+        elif any(address in skipped for skipped in unverified):
+            # An unfinished probe says nothing about reachability. Do not age
+            # history or call these devices offline after a timeout.
+            device = {**previous, "ip": ip, "status": "unknown", "subnet": subnet,
+                      "name": previous.get("name", ""), "mac": previous.get("mac", ""),
+                      "manufacturer": previous.get("manufacturer", "Unknown"),
+                      "last_seen": previous.get("last_seen")}
         else:
             missed = int(previous.get("missed_checks", 0)) + 1
             still_online = previous.get("status") == "online" and missed < OFFLINE_CONFIRMATIONS
@@ -424,7 +434,7 @@ def start_scan(subnet: str) -> str:
         active_job = job
         state.update(running=True, stopping=False, cancelled=False, monitor_paused=False,
                      progress=0, subnet=subnet, devices=[], error=None, started=int(time.time()),
-                     finished=None, last_presence=None, message="DISCOVERING HOSTS")
+                     finished=None, last_presence=None, message="DISCOVERING HOSTS", diagnostic="", warning="", scanned=0)
     threading.Thread(target=scan_network, args=(subnet, job), daemon=True).start()
     return subnet
 
@@ -441,26 +451,52 @@ def stop_scan() -> dict:
 
 
 def discover_chunks(network, job):
-    """Small batches provide visible progress and bounded cancellation latency."""
+    """Retry slow /26 blocks as /28s; keep all other results usable."""
     chunks = list(network.subnets(new_prefix=26)) if network.prefixlen < 26 else [network]
     found = {}
-    for index, chunk in enumerate(chunks):
+    total = network.num_addresses - 2
+    processed = 0
+
+    def update(message):
+        with lock:
+            if active_job is job and not job.background:
+                state.update(progress=round(processed * 80 / total), scanned=job.scanned,
+                             devices=list(found.values()), message=message)
+
+    def probe(chunk, retry=False):
+        nonlocal processed
         check_cancel(job.cancel)
-        # Explicit TCP/ICMP discovery works across routed VLANs too. Nmap uses
-        # ARP automatically for directly connected Ethernet targets.
-        xml = run(["nmap", "-sn", "-n", "-PE", "-PP", "-PS22,80,443,445,3389", "-PA80,443",
+        update(f"SCANNING {chunk}" + (" — SMALLER RETRY" if retry else ""))
+        command = ["nmap", "-sn", "-n", "-PE", "-PP", "-PS22,80,443,445,3389", "-PA80,443",
                    "--max-retries", "1", "--initial-rtt-timeout", "300ms", "--max-rtt-timeout", "1s",
-                   "--host-timeout", "5s", "-oX", "-", str(chunk)], 25, job.cancel)
-        # A /23 includes .0 and .255 addresses inside it; only its own two
-        # endpoints are excluded, not the endpoints of individual chunks.
+                   "--host-timeout", "5s", "-oX", "-", str(chunk)]
+        # Nmap's host timeout is not a deadline for the entire discovery batch.
+        # Sparse or filtered segments can legitimately take longer than 25s.
+        timeout = 30 if retry else 90
+        try:
+            xml = run(command, timeout, job.cancel)
+        except subprocess.TimeoutExpired:
+            job.diagnostics.append(f"Nmap discovery timed out after {timeout}s in {chunk}.")
+            if chunk.prefixlen < 28:
+                for smaller in chunk.subnets(new_prefix=28):
+                    probe(smaller, retry=True)
+                return
+            job.unverified.append(chunk)
+            usable = sum(address not in (network.network_address, network.broadcast_address) for address in chunk)
+            processed += usable
+            update(f"TIMEOUT IN {chunk} — CONTINUING")
+            return
         for device in parse_discovery(xml):
             address = ipaddress.ip_address(device["ip"])
             if address in network and address not in (network.network_address, network.broadcast_address):
                 found[device["ip"]] = device
-        with lock:
-            if active_job is job and not job.background:
-                state.update(progress=round((index + 1) * 80 / len(chunks)),
-                             devices=list(found.values()), message=f"DISCOVERY {index + 1}/{len(chunks)}")
+        usable = sum(address not in (network.network_address, network.broadcast_address) for address in chunk)
+        processed += usable
+        job.scanned += usable
+        update(f"CHECKED {job.scanned}/{total} ADDRESSES — {len(found)} ONLINE")
+
+    for chunk in chunks:
+        probe(chunk)
     return list(found.values())
 
 
@@ -509,9 +545,14 @@ def scan_network(subnet: str, job: ScanJob) -> None:
         check_cancel(job.cancel)
         with lock:
             if active_job is job:
-                devices = merged_device_list(subnet, devices)
+                devices = merged_device_list(subnet, devices, job.unverified)
+                missing = sum(device["status"] == "unknown" for device in devices)
+                warning = f"{missing} ADDRESSES NOT VERIFIED (TIMEOUT). OTHER RESULTS ARE AVAILABLE." if missing else ""
                 state.update(devices=devices, progress=100, finished=int(time.time()),
-                             last_presence=int(time.time()), message="SCAN COMPLETE")
+                             last_presence=int(time.time()), scanned=job.scanned,
+                             diagnostic="\n".join(job.diagnostics), warning=warning,
+                             monitor_paused=bool(missing),
+                             message="SCAN PARTIAL — SOME BLOCKS TIMED OUT" if missing else "SCAN COMPLETE")
     except ScanCancelled:
         with lock:
             if active_job is job:
@@ -519,7 +560,8 @@ def scan_network(subnet: str, job: ScanJob) -> None:
     except Exception as exc:
         with lock:
             if active_job is job:
-                state.update(error=str(exc), monitor_paused=True, message="SCAN FAILED — RETRY", finished=int(time.time()))
+                state.update(error="Scan could not finish. Results already found are retained; check technical details.",
+                             diagnostic=str(exc), monitor_paused=True, message="SCAN FAILED — RETRY", finished=int(time.time()))
     finally:
         with lock:
             if active_job is job:

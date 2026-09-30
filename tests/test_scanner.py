@@ -72,7 +72,7 @@ def test_table_headers_and_cells_use_the_same_order():
 
     start = app.index("return `<tr data-ip=")
     row = app[start:app.index("}).join('')", start)]
-    status = row.index("${on?'ONLINE':'OFFLINE'}")
+    status = row.index("${on?'ONLINE':")
     ip = row.index("${esc(d.ip)}", status)
     mac = row.index("${esc(d.mac||'Not recorded')}", ip)
     name = row.index("${esc(d.name||", ip)
@@ -200,3 +200,62 @@ def test_http_stop_then_scan_different_subnet(monkeypatch, tmp_path):
         server.shutdown()
         server.server_close()
         thread.join(2)
+
+
+def test_slow_block_retries_smaller_ranges_and_completes(monkeypatch):
+    job = scanner.ScanJob('192.168.0.0/23')
+    monkeypatch.setattr(scanner, 'active_job', job)
+    monkeypatch.setattr(scanner, 'state', dict(scanner.state))
+    commands = []
+    def fake_run(command, timeout, cancel):
+        chunk = command[-1]
+        commands.append((chunk, timeout))
+        if chunk == '192.168.1.0/26':
+            assert timeout == 90
+            raise scanner.subprocess.TimeoutExpired(command, timeout)
+        ip = str(scanner.ipaddress.ip_network(chunk).network_address + 1)
+        return f'<nmaprun><host><status state="up"/><address addr="{ip}" addrtype="ipv4"/></host></nmaprun>'
+    monkeypatch.setattr(scanner, 'run', fake_run)
+    result = scanner.discover_chunks(scanner.validated_network(job.subnet), job)
+    assert job.scanned == 510
+    assert not job.unverified
+    assert ('192.168.1.0/28', 30) in commands
+    assert any(d['ip'] == '192.168.0.1' for d in result)
+    assert any(d['ip'] == '192.168.1.193' for d in result)
+
+
+def test_persistent_timeout_keeps_history_and_marks_unknown(monkeypatch, tmp_path):
+    job = scanner.ScanJob('192.168.0.0/23')
+    monkeypatch.setattr(scanner, 'active_job', job)
+    monkeypatch.setattr(scanner, 'state', dict(scanner.state, running=True))
+    monkeypatch.setattr(scanner, 'DATA_DIR', tmp_path)
+    monkeypatch.setattr(scanner, 'HISTORY_FILE', tmp_path / 'devices.json')
+    old = {'ip':'192.168.1.5','subnet':job.subnet,'name':'Known server','status':'online','missed_checks':0,'last_seen':123}
+    scanner.save_history({'192.168.1.5':old})
+    def fake_run(command, timeout, cancel):
+        if command[-1] in ('192.168.1.0/26', '192.168.1.0/28'):
+            raise scanner.subprocess.TimeoutExpired(command, timeout)
+        return '<nmaprun/>'
+    monkeypatch.setattr(scanner, 'run', fake_run)
+    scanner.scan_network(job.subnet, job)
+    by_ip = {d['ip']:d for d in scanner.state['devices']}
+    assert by_ip['192.168.1.5']['status'] == 'unknown'
+    assert by_ip['192.168.1.5']['name'] == 'Known server'
+    assert by_ip['192.168.1.5']['last_seen'] == 123
+    assert scanner.load_history()['192.168.1.5'] == old
+    assert by_ip['192.168.1.20']['status'] == 'offline'
+    assert scanner.state['scanned'] == 494
+    assert '16 ADDRESSES NOT VERIFIED' in scanner.state['warning']
+    assert not scanner.state['running']
+    assert scanner.state['monitor_paused']
+
+
+def test_stop_during_timeout_retry_still_cancels(monkeypatch):
+    import pytest
+    job = scanner.ScanJob('192.168.0.0/23')
+    def fake_run(command, timeout, cancel):
+        cancel.set()
+        raise scanner.subprocess.TimeoutExpired(command, timeout)
+    monkeypatch.setattr(scanner, 'run', fake_run)
+    with pytest.raises(scanner.ScanCancelled):
+        scanner.discover_chunks(scanner.validated_network(job.subnet), job)
