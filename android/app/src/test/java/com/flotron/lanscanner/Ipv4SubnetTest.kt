@@ -10,6 +10,15 @@ class Ipv4SubnetTest {
         assertEquals("192.168.1.1", hosts.first())
         assertEquals("192.168.1.254", hosts.last())
     }
+    @Test fun slash23IncludesBothHalvesAndTheirInteriorEndpoints() {
+        val hosts = Ipv4Subnet.hosts("192.168.0.0", 23)
+        assertEquals(510, hosts.size)
+        assertEquals("192.168.0.1", hosts.first())
+        assertEquals("192.168.1.254", hosts.last())
+        assertTrue("192.168.0.255" in hosts)
+        assertTrue("192.168.1.0" in hosts)
+        assertEquals(4094, Ipv4Subnet.hosts("10.0.0.0", 20).size)
+    }
     @Test fun actualLanCanSpanTwoScanRanges() {
         assertTrue(Ipv4Subnet.contains("192.168.0.26", 23, "192.168.1.200"))
         assertFalse(Ipv4Subnet.contains("192.168.13.26", 24, "192.168.0.100"))

@@ -12,7 +12,8 @@ The device table can be sorted by status, last-known name, IP address, MAC addre
 
 The repository also contains a fully native, stand-alone Android scanner in [`android/`](android/). It does not connect to the Linux service or require a router/controller integration. The interface retains the same dark phosphor-green console appearance and includes:
 
-- automatic local-subnet detection plus an editable `/24` to `/30` CIDR;
+- a STOP SCAN button that cancels pending work before another range is started;
+- automatic local-subnet detection plus an editable `/20` to `/30` CIDR (including `/23` with 510 usable addresses);
 - a persistent most-recently-used history of up to 12 successfully scanned subnets;
 - verified IPv4/MAC pairs, offline history, local IEEE vendor lookup, hostname and latency;
 - sorting, all/online/offline status filters, TCP port inspection and user-initiated full scans;
@@ -21,9 +22,9 @@ The repository also contains a fully native, stand-alone Android scanner in [`an
 - inertial touch scrolling, animated code rain matching the Linux interface, three-state status filtering and a built-in About/source panel;
 - a radar/router adaptive launcher icon, the bundled open-source Share Tech Mono typeface and phosphor glow effects matching the Linux interface.
 
-After a full scan, every usable address in the selected subnet is listed. Addresses without an active neighbor are dimmed as offline; if one was seen previously, its last-known MAC, vendor and hostname are retained. To keep a `/24` list smooth, Android lays out the complete result set but only renders the cards currently visible on screen.
+After a full scan, every usable address in the selected subnet is listed. Addresses without an active neighbor are dimmed as offline; if one was seen previously, its last-known MAC, vendor and hostname are retained. To keep larger lists smooth, Android lays out the complete result set but only renders the cards currently visible on screen.
 
-MAC address visibility is a hard requirement for this build. Android removed access to the kernel ARP table for newer target SDKs, so this sideload edition deliberately targets Android API 31 while compiling with current tooling. It reads `/proc/net/arp`; if a phone vendor blocks that file anyway, the app reports `MAC ACCESS REQUIRED` and refuses to present misleading partial results. It cannot discover MAC addresses across a routed VLAN.
+Local MAC discovery remains enabled with target SDK 31 using native netlink, ARP and ioctl fallbacks. Routed targets are discovered by IP without requiring a MAC. Ranges that span both local and routed addresses handle each address independently. If local neighbor access is unavailable, IP results remain usable and MAC is explicitly marked unavailable.
 
 When a manually entered range belongs to another routed VLAN, the Android app switches to Layer-3 discovery instead of reporting an ARP permission error. It still reports reachable IPs, names, latency, online/offline state and TCP ports, but explicitly marks MAC and manufacturer as unavailable. This is a network boundary rather than an Android permission issue: ARP/MAC information does not cross a router. Real client MAC addresses on another VLAN require data from that VLAN's router, switch or controller.
 
@@ -63,7 +64,9 @@ The installer skips package-manager updates when all requirements are already in
 ## Notes
 
 - The default range is taken from the first active, globally addressed network interface.
-- A different CIDR may be entered; discovery is capped at 4096 addresses (/20) to prevent accidental oversized scans.
+- Enter an IPv4 CIDR from `/20` to `/30`, including `192.168.0.0/23`. Discovery uses small batches with progress. Routed subnets use ICMP/TCP discovery; their MACs are not available across routers.
+- **STOP SCAN** terminates the active discovery and pauses automatic presence scanning until you initiate another scan. Name resolution has a deadline, and cancelled/stale scans cannot overwrite the new range.
+- Device inspection accepts targets in the selected scan range, including routed VLANs.
 - MAC addresses are normally available only for devices on the same Layer-2 network/VLAN.
 - OS detection and some service details depend on device response and scanner privileges.
 - Scan only networks you own or are authorized to inspect.

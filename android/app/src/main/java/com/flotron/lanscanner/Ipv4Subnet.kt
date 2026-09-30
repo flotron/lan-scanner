@@ -24,7 +24,7 @@ internal object Ipv4Subnet {
         network(localIp, prefix) == network(ip, prefix)
 
     fun hosts(ip: String, prefix: Int): List<String> {
-        require(prefix in 24..30)
+        require(prefix in 20..30)
         val start = network(ip, prefix)
         return (start + 1 until start + (1L shl (32 - prefix)) - 1).map(::address)
     }

@@ -136,10 +136,15 @@ class LanDashboardView(context: Context) : View(context) {
 
     private fun updateState(value: ScanState) {
         if (disposed) return
+        val completed = state.scanning && !value.scanning && value.progress == 100
+        if (state.subnet != value.subnet && value.scanning) {
+            watched.clear(); watchHistory.clear(); watchResults.clear()
+            selected = null; detailRequest++; scrollYValue = 0f
+        }
         state = value
         refreshVisibleDevices()
         if (value.scanning && value.progress == 0 && value.subnet.contains('/')) rememberRange(value.subnet)
-        if (!value.scanning && value.progress == 100 && value.macAccessAvailable) lastScanFinished = System.currentTimeMillis()
+        if (completed && value.macAccessAvailable) lastScanFinished = System.currentTimeMillis()
         invalidate()
     }
 
@@ -206,7 +211,7 @@ class LanDashboardView(context: Context) : View(context) {
         text(canvas, range?.let { "${it.interfaceName} — ${it.localIp}" } ?: "NO WI-FI / ETHERNET", x + 130f * density, y + 22f * density, 9f, pale)
         text(canvas, customRange ?: range?.cidr ?: "—", x + 130f * density, y + 61f * density, 10f, pale)
         scanRect = RectF(x + 14f * density, y + 72f * density, width - x - 14f * density, y + 98f * density)
-        button(canvas, scanRect, if (state.scanning) "SCANNING ${state.progress}%" else "▶ INITIATE SCAN")
+        button(canvas, scanRect, if (state.scanning) "■ STOP SCAN (${state.progress}%)" else "▶ INITIATE SCAN")
         return y + h
     }
 
@@ -378,7 +383,7 @@ class LanDashboardView(context: Context) : View(context) {
                 if (selected != null) { selected = null; detailPorts = null; detailRequest++; invalidate(); return true }
                 if (aboutRect.contains(x, y)) { showAboutDialog(); return true }
                 if (rangeRect.contains(x, y)) { showRangeDialog(); return true }
-                if (scanRect.contains(x, y)) { displayedRange = engine.currentRange(); engine.scan(customRange); return true }
+                if (scanRect.contains(x, y)) { if (state.scanning) engine.cancel() else { displayedRange = engine.currentRange(); engine.scan(customRange) }; return true }
                 if (filterRect.contains(x, y)) { statusFilter = (statusFilter + 1) % 3; refreshVisibleDevices(); scrollYValue = 0f; invalidate(); return true }
                 if (sortRect.contains(x, y)) { sortMode = (sortMode + 1) % 5; refreshVisibleDevices(); invalidate(); return true }
                 watchRects.firstOrNull { it.first.contains(x, y) }?.let { (_, device) ->
@@ -468,7 +473,7 @@ class LanDashboardView(context: Context) : View(context) {
             typeface = matrixTypeface; setPadding(20, 12, 20, 12)
         }
         AlertDialog.Builder(context)
-            .setTitle("SCAN RANGE (/24 TO /30)")
+            .setTitle("SCAN RANGE (/20 TO /30)")
             .setView(input)
             .setPositiveButton("APPLY") { _, _ ->
                 val value = input.text.toString().trim()

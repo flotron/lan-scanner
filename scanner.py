@@ -11,6 +11,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 import urllib.parse
@@ -30,11 +31,37 @@ OFFLINE_CONFIRMATIONS = max(2, int(os.getenv("LANSCAN_OFFLINE_CONFIRMATIONS", "3
 OUI_FILES = (Path("/usr/share/nmap/nmap-mac-prefixes"), Path("/usr/share/ieee-data/oui.txt"))
 REQUIRED_COMMANDS = ("python3", "nmap", "ip", "ping", "curl", "tar", "systemctl", "systemd-run")
 OPTIONAL_COMMANDS = ("avahi-resolve-address", "nmblookup")
-state = {"running": False, "progress": 0, "subnet": "", "devices": [], "error": None, "started": None, "finished": None, "last_presence": None, "monitor_interval": 15}
+state = {"running": False, "progress": 0, "subnet": "", "devices": [], "error": None, "started": None, "finished": None, "last_presence": None, "monitor_interval": 15, "stopping": False, "cancelled": False, "monitor_paused": False, "message": "READY"}
 lock = threading.Lock()
 viewer_seen = 0.0
 version_cache = {"latest_version": "", "checked_at": 0.0, "error": ""}
 version_lock = threading.Lock()
+
+
+class ScanCancelled(Exception):
+    pass
+
+
+class ScanJob:
+    def __init__(self, subnet: str, background: bool = False):
+        self.subnet = subnet
+        self.background = background
+        self.cancel = threading.Event()
+
+
+active_job = None
+
+
+def validated_network(subnet: str):
+    network = ipaddress.ip_network(subnet, strict=False)
+    if network.version != 4 or not 20 <= network.prefixlen <= 30:
+        raise ValueError("Use an IPv4 range from /20 to /30 (up to 4094 hosts).")
+    return network
+
+
+def check_cancel(cancel):
+    if cancel is not None and cancel.is_set():
+        raise ScanCancelled()
 
 
 def current_version() -> str:
@@ -133,8 +160,34 @@ def local_update_request(address: str, origin: str, host: str) -> bool:
     return True
 
 
-def run(command: list[str], timeout: int = 30) -> str:
-    return subprocess.run(command, text=True, capture_output=True, timeout=timeout, check=False).stdout
+def run(command: list[str], timeout: float = 30, cancel=None) -> str:
+    """Poll child processes so STOP terminates and reaps the actual scan."""
+    check_cancel(cancel)
+    if cancel is None:
+        return subprocess.run(command, text=True, capture_output=True, timeout=timeout, check=False).stdout
+    process = subprocess.Popen(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            check_cancel(cancel)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, timeout)
+            try:
+                output, error = process.communicate(timeout=min(.15, remaining))
+                if process.returncode:
+                    raise OSError(error.strip() or f"{command[0]} exited with status {process.returncode}")
+                return output
+            except subprocess.TimeoutExpired:
+                continue
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.communicate(timeout=.5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.communicate()
 
 
 def interfaces() -> list[dict]:
@@ -182,18 +235,22 @@ def vendor_for(mac: str) -> str:
     return VENDORS.get(re.sub(r"[^0-9A-Fa-f]", "", mac)[:6].upper(), "Unknown") if mac else "Unknown"
 
 
-def reverse_dns(ip: str) -> str:
+def reverse_dns(ip: str, cancel=None) -> str:
+    # libc DNS lookups cannot be interrupted in a Python thread. Isolate the
+    # lookup in a short-lived child with a deadline and the scan's stop signal.
     try:
-        return socket.gethostbyaddr(ip)[0]
-    except (socket.herror, socket.gaierror, TimeoutError):
+        return run([sys.executable, "-c", "import socket,sys; print(socket.gethostbyaddr(sys.argv[1])[0])", ip],
+                   2, cancel).strip()
+    except (OSError, subprocess.TimeoutExpired):
         return ""
 
 
-def optional_command_name(command: list[str], pattern: str) -> str:
+def optional_command_name(command: list[str], pattern: str, cancel=None) -> str:
+    check_cancel(cancel)
     if not shutil.which(command[0]):
         return ""
     try:
-        output = run(command, 3)
+        output = run(command, 2, cancel)
         match = re.search(pattern, output, re.MULTILINE | re.IGNORECASE)
         return match.group(1).rstrip(".") if match else ""
     except (OSError, subprocess.TimeoutExpired):
@@ -276,17 +333,19 @@ def snmp_identity(ip: str) -> str:
     return description[:120]
 
 
-def identify_host(ip: str) -> dict:
+def identify_host(ip: str, cancel=None) -> dict:
     """Try low-cost naming protocols in order of usefulness."""
-    name = reverse_dns(ip)
+    check_cancel(cancel)
+    name = reverse_dns(ip, cancel)
     source = "DNS" if name else ""
     if not name:
-        name = optional_command_name(["avahi-resolve-address", "-4", ip], rf"^{re.escape(ip)}\s+([^\s]+)")
+        name = optional_command_name(["avahi-resolve-address", "-4", ip], rf"^{re.escape(ip)}\s+([^\s]+)", cancel)
         source = "mDNS" if name else ""
     if not name:
-        name = optional_command_name(["nmblookup", "-A", ip], r"^\s*([^\s<]+)\s+<00>\s+-")
+        name = optional_command_name(["nmblookup", "-A", ip], r"^\s*([^\s<]+)\s+<00>\s+-", cancel)
         source = "NetBIOS" if name else ""
     if not name:
+        check_cancel(cancel)
         name = snmp_identity(ip)
         source = "SNMP" if name else ""
     return {"name": name, "name_source": source, "name_probe_at": int(time.time())}
@@ -352,73 +411,132 @@ def parse_discovery(xml: str) -> list[dict]:
     return devices
 
 
-def scan_network(subnet: str) -> None:
+def start_scan(subnet: str) -> str:
+    """Validate and reserve atomically before starting the worker."""
+    global active_job
+    subnet = str(validated_network(subnet))
     with lock:
-        state.update(running=True, progress=8, subnet=subnet, devices=[], error=None, started=int(time.time()), finished=None)
+        if active_job is not None and not active_job.background:
+            raise ValueError("A scan is already running. Stop it before changing range.")
+        if active_job is not None:
+            active_job.cancel.set()
+        job = ScanJob(subnet)
+        active_job = job
+        state.update(running=True, stopping=False, cancelled=False, monitor_paused=False,
+                     progress=0, subnet=subnet, devices=[], error=None, started=int(time.time()),
+                     finished=None, last_presence=None, message="DISCOVERING HOSTS")
+    threading.Thread(target=scan_network, args=(subnet, job), daemon=True).start()
+    return subnet
+
+
+def stop_scan() -> dict:
+    with lock:
+        state["monitor_paused"] = True
+        if active_job is not None:
+            active_job.cancel.set()
+            state.update(stopping=True, message="STOPPING SCAN…")
+            return {"stopping": True}
+        state.update(running=False, stopping=False, cancelled=True, message="SCAN STOPPED")
+        return {"stopping": False}
+
+
+def discover_chunks(network, job):
+    """Small batches provide visible progress and bounded cancellation latency."""
+    chunks = list(network.subnets(new_prefix=26)) if network.prefixlen < 26 else [network]
+    found = {}
+    for index, chunk in enumerate(chunks):
+        check_cancel(job.cancel)
+        # Explicit TCP/ICMP discovery works across routed VLANs too. Nmap uses
+        # ARP automatically for directly connected Ethernet targets.
+        xml = run(["nmap", "-sn", "-n", "-PE", "-PP", "-PS22,80,443,445,3389", "-PA80,443",
+                   "--max-retries", "1", "--initial-rtt-timeout", "300ms", "--max-rtt-timeout", "1s",
+                   "--host-timeout", "5s", "-oX", "-", str(chunk)], 25, job.cancel)
+        # A /23 includes .0 and .255 addresses inside it; only its own two
+        # endpoints are excluded, not the endpoints of individual chunks.
+        for device in parse_discovery(xml):
+            address = ipaddress.ip_address(device["ip"])
+            if address in network and address not in (network.network_address, network.broadcast_address):
+                found[device["ip"]] = device
+        with lock:
+            if active_job is job and not job.background:
+                state.update(progress=round((index + 1) * 80 / len(chunks)),
+                             devices=list(found.values()), message=f"DISCOVERY {index + 1}/{len(chunks)}")
+    return list(found.values())
+
+
+def enrich_names(devices, job, seconds=12):
+    """Names are optional; unavailable DNS must never block discovery."""
+    unnamed = [device for device in devices if not device.get("name")]
+    if not unnamed:
+        return
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=12)
+    pending = {pool.submit(identify_host, device["ip"], job.cancel): device for device in unnamed}
+    deadline = time.monotonic() + seconds
     try:
-        network = ipaddress.ip_network(subnet, strict=False)
-        if network.version != 4 or network.num_addresses > 4096:
-            raise ValueError("For safety, the maximum scan range is /20 (4096 addresses).")
+        while pending:
+            check_cancel(job.cancel)
+            if time.monotonic() >= deadline:
+                break
+            done, _ = concurrent.futures.wait(pending, timeout=.15,
+                                              return_when=concurrent.futures.FIRST_COMPLETED)
+            for future in done:
+                device = pending.pop(future)
+                device.update(future.result())
+    finally:
+        for future in pending:
+            future.cancel()
+        # Each running lookup has its own short timeout; never wait for all
+        # remaining names before allowing the next subnet scan.
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+def scan_network(subnet: str, job: ScanJob) -> None:
+    global active_job
+    try:
+        devices = discover_chunks(validated_network(subnet), job)
+        check_cancel(job.cancel)
         with lock:
-            state["progress"] = 18
-        xml = run(["nmap", "-sn", "-PR", "-oX", "-", str(network)], max(45, min(300, network.num_addresses // 4)))
-        devices = parse_discovery(xml)
+            if active_job is job and not job.background:
+                state.update(progress=85, message="RESOLVING NAMES (MAX 12s)")
+        if job.background:
+            previous = load_history()
+            for device in devices:
+                old = previous.get(device["ip"], {})
+                if old.get("subnet") == subnet and not device.get("name"):
+                    device["name"] = old.get("name", "")
+                    device["name_source"] = old.get("name_source", "")
+        enrich_names(devices, job)
+        check_cancel(job.cancel)
         with lock:
-            state["progress"] = 82
-        unnamed = [d for d in devices if not d["name"]]
-        with concurrent.futures.ThreadPoolExecutor(max_workers=24) as pool:
-            identities = list(pool.map(lambda d: identify_host(d["ip"]), unnamed))
-        for device, identity in zip(unnamed, identities):
-            device.update(identity)
-        devices = merged_device_list(subnet, devices)
+            if active_job is job:
+                devices = merged_device_list(subnet, devices)
+                state.update(devices=devices, progress=100, finished=int(time.time()),
+                             last_presence=int(time.time()), message="SCAN COMPLETE")
+    except ScanCancelled:
         with lock:
-            state.update(devices=devices, progress=100, running=False, finished=int(time.time()), last_presence=int(time.time()))
+            if active_job is job:
+                state.update(cancelled=True, message="SCAN STOPPED", finished=int(time.time()))
     except Exception as exc:
         with lock:
-            state.update(running=False, error=str(exc), progress=0, finished=int(time.time()))
+            if active_job is job:
+                state.update(error=str(exc), monitor_paused=True, message="SCAN FAILED — RETRY", finished=int(time.time()))
+    finally:
+        with lock:
+            if active_job is job:
+                active_job = None
+                state.update(running=False, stopping=False)
 
 
 def presence_scan() -> None:
-    """Cheap discovery used only while at least one browser is active."""
+    """Share scan ownership; a manual request supersedes background work."""
+    global active_job
     with lock:
         subnet = state["subnet"]
-        busy = state["running"]
-        old_devices = list(state.get("devices", []))
-    if not subnet or busy:
-        return
-    try:
-        network = ipaddress.ip_network(subnet)
-        xml = run([
-            "nmap", "-sn", "-PR", "-PE", "-PP",
-            "-PS22,80,443,445,3389", "-PA80,443",
-            "--max-retries", "2", "--initial-rtt-timeout", "500ms",
-            "--max-rtt-timeout", "2s", "-oX", "-", subnet,
-        ], max(45, min(180, network.num_addresses // 3)))
-        online = parse_discovery(xml)
-        old_by_ip = {item["ip"]: item for item in old_devices}
-        identify = []
-        for device in online:
-            old = old_by_ip.get(device["ip"], {})
-            if not device["name"]:
-                device["name"] = old.get("name", "")
-                device["name_source"] = old.get("name_source", "")
-                device["name_probe_at"] = old.get("name_probe_at")
-                if not device["name"] and time.time() - (old.get("name_probe_at") or 0) >= 3600:
-                    identify.append(device)
-            if not device["mac"]:
-                device["mac"] = old.get("mac", "")
-                device["manufacturer"] = old.get("manufacturer", "Unknown")
-        if identify:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=12) as pool:
-                identities = list(pool.map(lambda d: identify_host(d["ip"]), identify))
-            for device, identity in zip(identify, identities):
-                device.update(identity)
-        devices = merged_device_list(subnet, online)
-        with lock:
-            if state["subnet"] == subnet:
-                state.update(devices=devices, last_presence=int(time.time()))
-    except Exception:
-        pass
+        if not subnet or active_job is not None or state["monitor_paused"]:
+            return
+        job = ScanJob(subnet, background=True)
+        active_job = job
+    scan_network(subnet, job)
 
 
 def presence_monitor() -> None:
@@ -477,9 +595,11 @@ def watch_ips(values) -> list[dict]:
 
 def detail_scan(ip: str) -> dict:
     address = ipaddress.ip_address(ip)
-    if address.version != 4 or not any(address in ipaddress.ip_network(i["subnet"]) for i in interfaces()):
-        raise ValueError("The address must belong to a local subnet.")
-    xml = run(["nmap", "-sT", "-sV", "--version-light", "-O", "--osscan-limit", "--top-ports", "1000", "-oX", "-", ip], 180)
+    with lock:
+        subnet = state.get("subnet")
+    if address.version != 4 or not subnet or address not in validated_network(subnet):
+        raise ValueError("The address must belong to the selected scan range.")
+    xml = run(["nmap", "-n", "-Pn", "-sT", "-sV", "--version-light", "-O", "--osscan-limit", "--top-ports", "1000", "-oX", "-", ip], 180)
     root = ET.fromstring(xml)
     host = root.find("host")
     if host is None:
@@ -545,7 +665,7 @@ class Handler(SimpleHTTPRequestHandler):
         return super().do_GET()
 
     def do_POST(self):
-        if self.path not in ("/api/scan", "/api/watch", "/api/update"):
+        if self.path not in ("/api/scan", "/api/scan/stop", "/api/watch", "/api/update"):
             return self.send_json({"error": "Not found"}, 404)
         try:
             if self.path == "/api/update":
@@ -554,13 +674,13 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(schedule_update(self.headers.get("X-Update-Id", "")), 202)
             size = min(int(self.headers.get("Content-Length", "0")), 8192)
             body = json.loads(self.rfile.read(size) or b"{}")
+            if not isinstance(body, dict):
+                raise ValueError("Expected a JSON object.")
+            if self.path == "/api/scan/stop":
+                return self.send_json(stop_scan())
             if self.path == "/api/watch":
                 return self.send_json({"results": watch_ips(body.get("ips"))})
-            subnet = str(ipaddress.ip_network(body.get("subnet", ""), strict=False))
-            with lock:
-                if state["running"]:
-                    return self.send_json({"error": "A scan is already running."}, 409)
-            threading.Thread(target=scan_network, args=(subnet,), daemon=True).start()
+            subnet = start_scan(body.get("subnet", ""))
             return self.send_json({"started": True, "subnet": subnet}, 202)
         except (ValueError, json.JSONDecodeError) as exc:
             return self.send_json({"error": f"Invalid subnet: {exc}"}, 400)

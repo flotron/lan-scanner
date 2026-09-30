@@ -18,8 +18,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutorService
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeUnit
 import kotlin.math.max
 
@@ -32,11 +31,12 @@ class LanScanEngine(context: Context, private val onState: (ScanState) -> Unit) 
     private val portWorkers = Executors.newFixedThreadPool(24)
     private val vendorWorker = Executors.newSingleThreadExecutor()
     private val nameWorkers = Executors.newFixedThreadPool(8)
-    private val scanRunning = AtomicBoolean(false)
+    private val scanLock = Any()
+    @Volatile private var activeScan: ScanSession? = null
+    @Volatile private var generation = 0L
     @Volatile private var closed = false
     private val vendors = VendorDatabase(appContext)
     private val history = DeviceHistory(appContext)
-    @Volatile private var cancelled = false
     @Volatile private var state = ScanState()
 
     init {
@@ -74,150 +74,122 @@ class LanScanEngine(context: Context, private val onState: (ScanState) -> Unit) 
     }
 
     fun scan(cidrOverride: String? = null) {
-        if (closed || !scanRunning.compareAndSet(false, true)) return
-        cancelled = false
-        coordinator.execute {
-            try {
-                performScan(cidrOverride)
-            } catch (error: InterruptedException) {
-                Thread.currentThread().interrupt()
-            } catch (error: Exception) {
-                publish(state.copy(scanning = false, message = "SCAN FAILED — TAP TO RETRY"))
-            } finally {
-                if (state.scanning) publish(state.copy(scanning = false, message = "SCAN STOPPED"))
-                scanRunning.set(false)
-            }
+        val session = synchronized(scanLock) {
+            if (closed || activeScan != null) return
+            ScanSession(++generation).also { activeScan = it }
         }
-    }
-
-    private fun performScan(cidrOverride: String?) {
-        val range = if (cidrOverride.isNullOrBlank()) currentRange() else parseRange(cidrOverride)
-        if (range == null) return publish(state.copy(scanning = false,
-            message = if (currentRange() == null) "CONNECT TO WI-FI OR ETHERNET" else "INVALID RANGE — USE IPv4 /24 TO /30"))
-        publish(ScanState(range.cidr, true, 0, message = "ACTIVATING NETWORK NEIGHBORS"))
-        val responsive = ConcurrentHashMap<String, Long>()
-        val completed = AtomicInteger()
-        runBatch(workers, range.hosts.map { ip -> Callable {
-            if (!cancelled && !closed) {
-                probe(ip)?.let { responsive[ip] = it }
-                val count = completed.incrementAndGet()
-                if (count % 8 == 0 || count == range.hosts.size) synchronized(completed) {
-                    val progress = (completed.get() * 70 / range.hosts.size).coerceIn(1, 70)
-                    publish(state.copy(progress = max(state.progress, progress)))
+        coordinator.execute {
+            var failure: String? = null
+            try {
+                performScan(cidrOverride, session)
+            } catch (_: CancellationException) {
+                // The final state below re-enables controls after work has been cancelled.
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            } catch (_: Exception) {
+                failure = "SCAN FAILED — CHECK NETWORK AND RETRY"
+            } finally {
+                synchronized(scanLock) {
+                    if (activeScan === session) {
+                        activeScan = null
+                        val stopped = session.cancelled.get()
+                        val message = if (stopped) "SCAN STOPPED — SELECT RANGE OR SCAN AGAIN" else failure ?: state.message
+                        publishState(state.copy(scanning = false, message = message,
+                            progress = if (stopped || failure != null) state.progress.coerceAtMost(99) else state.progress), session.generation)
+                    }
                 }
             }
-        } }, 35)
-        if (cancelled) return
-        Thread.sleep(500)
-        if (!BuildConfig.MAC_DISCOVERY_ENABLED) {
-            publish(state.copy(progress = 78, message = "RESOLVING HOSTS — MAC DISABLED"))
-            return publishLayer3Results(
-                range,
-                responsive,
-                "Unavailable",
-                "MAC discovery disabled",
-                "${responsive.size} HOSTS — MAC UNAVAILABLE IN THIS DISTRIBUTION"
-            )
-    }
-    val active = currentRange()
-    if (active == null || active.localIp != range.localIp || active.interfaceName != range.interfaceName) {
-        return publish(state.copy(scanning = false, message = "NETWORK CHANGED — SCAN AGAIN"))
-    }
-    val directSubnet = range.hosts.all { Ipv4Subnet.contains(active.localIp, active.localPrefix, it) }
-    if (!directSubnet) {
-        publish(state.copy(progress = 78, message = "ROUTED VLAN — RESOLVING HOSTS"))
-        return publishLayer3Results(
-            range,
-            responsive,
-            "Unavailable (routed)",
-            "Layer 3 route",
-            "${responsive.size} ROUTED HOSTS — MAC REQUIRES SAME VLAN"
-        )
-    }
-    publish(state.copy(progress = 78, message = "READING IP / MAC NEIGHBOR TABLE"))
-    val arp = readArpTable(range)
-    if (arp == null) {
-        return publish(state.copy(scanning = false, progress = 100, macAccessAvailable = false,
-            message = "MAC ACCESS BLOCKED: ${NativeArp.lastError.ifBlank { "NEIGHBOR TABLE UNAVAILABLE" }}"))
+        }
     }
 
-    val previous = history.load()
-    val names = resolveNames(arp.keys.filter { responsive.containsKey(it) })
-    val found = arp.filterKeys { it in range.hosts }.map { (ip, mac) ->
-        val latency = responsive[ip]
-        val old = previous[ip]?.takeIf { it.mac.equals(mac, ignoreCase = true) }
-        val resolvedName = names[ip] ?: "Unknown host"
-        LanDevice(
-            ip = ip,
-            mac = mac,
-            vendor = vendors.find(mac).takeUnless { it == "Unknown" } ?: old?.vendor ?: "Unknown",
-            name = resolvedName.takeUnless { it == "Unknown host" } ?: old?.name ?: "Unknown host",
-            online = latency != null,
-            latencyMs = latency,
-            lastSeen = if (latency != null) System.currentTimeMillis() else old?.lastSeen ?: 0L
-        )
-    }.sortedWith(compareBy { ipValue(it.ip) })
-
-    val merged = previous.toMutableMap()
-    found.forEach { merged[it.ip] = it }
-    history.save(merged.values)
-    val foundByIp = found.associateBy { it.ip }
-    val allAddresses = range.hosts.map { ip ->
-        foundByIp[ip]
-            ?: merged[ip]?.copy(online = false, latencyMs = null)
-            ?: LanDevice(ip, "Not recorded", "Unknown", "No client recorded", online = false, lastSeen = 0)
-    }
-    publish(ScanState(range.cidr, false, 100, allAddresses,
-        "${found.size} CLIENTS WITH VERIFIED MAC", true))
+    fun cancel() {
+        synchronized(scanLock) {
+            val session = activeScan ?: return
+            session.cancelled.set(true)
+            publishState(state.copy(scanning = true, message = "STOPPING SCAN…"), session.generation)
+        }
     }
 
-    private fun publishLayer3Results(
-        range: NetworkRange,
-        responsive: Map<String, Long>,
-        macLabel: String,
-        vendorLabel: String,
-        resultMessage: String
-    ) {
+    private fun performScan(cidrOverride: String?, session: ScanSession) {
+        session.check()
+        val range = if (cidrOverride.isNullOrBlank()) currentRange() else parseRange(cidrOverride)
+        if (range == null) {
+            publishScan(session, state.copy(scanning = false, progress = 0,
+                message = if (currentRange() == null) "CONNECT TO WI-FI OR ETHERNET" else "INVALID RANGE — USE IPv4 /20 TO /30"))
+            return
+        }
+        publishScan(session, ScanState(range.cidr, true, 0, message = "DISCOVERING ${range.hosts.size} ADDRESSES"))
+        val responsive = ConcurrentHashMap<String, Long>()
+        // Batches bound memory and provide progress on /23 and larger ranges.
+        // Each batch has its own deadline instead of timing out the whole range.
+        var completed = 0
+        for (batch in range.hosts.chunked(48)) {
+            session.run(workers, batch.map { ip -> Callable {
+                val latency = probe(ip)
+                session.check()
+                if (latency != null) responsive[ip] = latency
+            } }, 8_000)
+            completed += batch.size
+            val partial = responsive.entries.sortedBy { Ipv4Subnet.value(it.key) }.map { (ip, latency) ->
+                LanDevice(ip, "Pending", "Pending", "Resolving…", latencyMs = latency)
+            }
+            publishScan(session, state.copy(progress = completed * 75 / range.hosts.size, devices = partial,
+                message = "PROBED $completed / ${range.hosts.size} — ${responsive.size} ONLINE"))
+        }
+        session.check()
+        val active = currentRange()
+        if (active == null || active.localIp != range.localIp || active.interfaceName != range.interfaceName) {
+            publishScan(session, state.copy(message = "NETWORK CHANGED — SCAN AGAIN"))
+            return
+        }
+        val localHosts = range.hosts.filter { Ipv4Subnet.contains(active.localIp, active.localPrefix, it) }
+        publishScan(session, state.copy(progress = 80, message = "READING NEIGHBORS / RESOLVING NAMES"))
+        val arp = if (BuildConfig.MAC_DISCOVERY_ENABLED && localHosts.isNotEmpty())
+            readArpTable(range.copy(hosts = localHosts)) else emptyMap()
+        session.check()
+        val names = resolveNames(responsive.keys, session)
+        session.check()
         val previous = history.load()
-        val now = System.currentTimeMillis()
-        val names = resolveNames(responsive.keys)
-        val onlineByIp = responsive.mapValues { (ip, latency) ->
-            val old = previous[ip]
-            val resolvedName = names[ip] ?: "Unknown host"
-            LanDevice(
-                ip = ip,
-                mac = macLabel,
-                vendor = vendorLabel,
-                name = resolvedName.takeUnless { it == "Unknown host" } ?: old?.name ?: "Unknown host",
-                online = true,
-                latencyMs = latency,
-                lastSeen = now
-            )
-        }
+        val localSet = localHosts.toHashSet()
         val allAddresses = range.hosts.map { ip ->
-            onlineByIp[ip] ?: LanDevice(
-                ip = ip,
-                mac = macLabel,
-                vendor = vendorLabel,
-                name = previous[ip]?.name ?: "No client recorded",
-                online = false,
-                latencyMs = null,
-                lastSeen = previous[ip]?.lastSeen ?: 0L
-            )
+            val latency = responsive[ip]
+            val mac = arp?.get(ip)
+            val old = previous[ip]?.takeIf { mac == null || it.mac.equals(mac, ignoreCase = true) }
+            val macLabel = when {
+                !BuildConfig.MAC_DISCOVERY_ENABLED -> "Unavailable"
+                ip !in localSet -> "Unavailable (routed)"
+                mac != null -> mac
+                arp == null -> "Unavailable (access)"
+                latency == null -> old?.mac ?: "Not recorded"
+                else -> "Not recorded"
+            }
+            LanDevice(ip, macLabel,
+                if (mac != null) vendors.find(mac).takeUnless { it == "Unknown" } ?: old?.vendor ?: "Unknown"
+                else if (ip !in localSet) "Layer 3 route" else if (latency == null) old?.vendor ?: "Unknown" else "Unknown",
+                names[ip]?.takeUnless { it == "Unknown host" } ?: old?.name ?: if (latency != null) "Unknown host" else "No client recorded",
+                online = latency != null, latencyMs = latency,
+                lastSeen = if (latency != null) System.currentTimeMillis() else old?.lastSeen ?: 0L)
         }
-        publish(ScanState(
-            range.cidr,
-            false,
-            100,
-            allAddresses,
-            resultMessage,
-            true
-        ))
+        synchronized(scanLock) {
+            session.check()
+            val merged = previous.toMutableMap()
+            // Store verified identities; remote scans cannot replace a verified MAC.
+            allAddresses.filter { arp?.containsKey(it.ip) == true }.forEach { merged[it.ip] = it }
+            history.save(merged.values)
+            val diagnostic = when {
+                !BuildConfig.MAC_DISCOVERY_ENABLED -> "MAC DISABLED"
+                arp == null -> "LOCAL MAC UNAVAILABLE"
+                localHosts.size < range.hosts.size -> "ROUTED MAC UNAVAILABLE"
+                else -> "${arp.size} VERIFIED MACS"
+            }
+            publishScan(session, ScanState(range.cidr, false, 100, allAddresses,
+                "${responsive.size} ONLINE — $diagnostic", true))
+        }
     }
 
     fun close() {
         closed = true
-        cancelled = true
+        activeScan?.cancelled?.set(true)
         listOf(coordinator, workers, portCoordinator, portWorkers, nameWorkers, vendorWorker).forEach { it.shutdownNow() }
         main.removeCallbacksAndMessages(null)
     }
@@ -257,11 +229,14 @@ class LanScanEngine(context: Context, private val onState: (ScanState) -> Unit) 
         }
     }
 
-    private fun resolveNames(ips: Collection<String>): Map<String, String> {
+    private fun resolveNames(ips: Collection<String>, session: ScanSession): Map<String, String> {
         val names = ConcurrentHashMap<String, String>()
-        runBatch(nameWorkers, ips.map { ip -> Callable {
-            if (!closed && !cancelled) names[ip] = resolveName(ip)
-        } }, 6)
+        session.run(nameWorkers, ips.map { ip -> Callable {
+            session.check()
+            val name = resolveName(ip)
+            session.check()
+            names[ip] = name
+        } }, 6_000, allowPartial = true)
         return names.toMap()
     }
 
@@ -343,18 +318,25 @@ class LanScanEngine(context: Context, private val onState: (ScanState) -> Unit) 
         }
     }.getOrNull()
 
-    private fun publish(value: ScanState) {
-        if (closed || cancelled) return
+    private fun publishScan(session: ScanSession, value: ScanState) {
+        synchronized(scanLock) {
+            session.check()
+            if (activeScan === session) publishState(value, session.generation)
+        }
+    }
+
+    private fun publishState(value: ScanState, scanGeneration: Long) {
+        if (closed) return
         state = value
-        main.post { if (!closed) onState(value) }
+        main.post { if (!closed && generation == scanGeneration) onState(value) }
     }
 
     private fun parseRange(cidr: String): NetworkRange? = runCatching {
         val parts = cidr.trim().split('/')
         require(parts.size == 2)
         val prefix = parts[1].toInt()
-        // Keep mobile scans bounded. Larger-than-/24 ranges are intentionally rejected.
-        require(prefix in 24..30)
+        // Match desktop limits; /23 includes 510 usable addresses.
+        require(prefix in 20..30)
         val active = currentRange() ?: return@runCatching null
         NetworkRange(active.localIp, prefix, Ipv4Subnet.hosts(parts[0], prefix),
             Ipv4Subnet.address(Ipv4Subnet.network(parts[0], prefix)), active.interfaceName, active.localPrefix)
@@ -366,8 +348,6 @@ class LanScanEngine(context: Context, private val onState: (ScanState) -> Unit) 
             (bytes[0] == 172 && bytes[1] in 16..31) ||
             (bytes[0] == 192 && bytes[1] == 168)
     }
-
-    private fun ipValue(ip: String): Long = ip.split('.').fold(0L) { total, octet -> total * 256 + octet.toLong() }
 
     private data class Candidate(val priority: Int, val interfaceName: String, val ip: String, val prefix: Int)
 }
