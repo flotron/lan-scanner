@@ -15,6 +15,8 @@ UPDATE_TMP=$(mktemp -d)
 STAGE_DIR=""
 BACKUP_DIR="${APP_DIR}.previous"
 SWAPPED=0
+PHASE="preparing"
+ERROR_LOG="$UPDATE_TMP/error.log"
 
 write_status() {
     python3 - "$STATUS_FILE" "$UPDATE_ID" "$1" "$2" "${3:-}" <<'PY'
@@ -41,8 +43,9 @@ on_error() {
     code=$?
     trap - ERR
     rollback
-    write_status failed "Update failed; the previous version was restored." ""
-    echo "LAN Scanner update failed; previous version restored." >&2
+    detail=$(tail -c 1500 "$ERROR_LOG" 2>/dev/null || true)
+    write_status failed "Update failed during $PHASE (exit $code). Installed version retained. ${detail}" ""
+    echo "LAN Scanner update failed during $PHASE (exit $code); installed version retained. $detail" >&2
     exit "$code"
 }
 
@@ -58,11 +61,21 @@ command -v curl >/dev/null
 command -v tar >/dev/null
 command -v systemctl >/dev/null
 
-write_status downloading "Downloading and validating the new version..." ""
-curl -fL --retry 3 --connect-timeout 10 \
-    https://github.com/flotron/lan-scanner/archive/refs/heads/main.tar.gz \
-    -o "$UPDATE_TMP/lan-scanner.tar.gz"
-tar -xzf "$UPDATE_TMP/lan-scanner.tar.gz" -C "$UPDATE_TMP"
+PHASE="downloading"
+write_status downloading "Downloading from GitHub (maximum 120 seconds per route)..." ""
+# Direct codeload avoids the extra github.com redirect. Fall back to the archive route.
+if ! curl -fSL --connect-timeout 10 --max-time 120 --speed-limit 1024 --speed-time 20 \
+    https://codeload.github.com/flotron/lan-scanner/tar.gz/refs/heads/main \
+    -o "$UPDATE_TMP/lan-scanner.tar.gz" 2>"$ERROR_LOG"; then
+    write_status downloading "First download route failed; retrying GitHub archive (maximum 120 seconds)..." ""
+    curl -fSL --connect-timeout 10 --max-time 120 --speed-limit 1024 --speed-time 20 \
+        https://github.com/flotron/lan-scanner/archive/refs/heads/main.tar.gz \
+        -o "$UPDATE_TMP/lan-scanner.tar.gz" 2>>"$ERROR_LOG"
+fi
+: >"$ERROR_LOG"
+PHASE="validating"
+write_status validating "Download complete. Validating files..." ""
+tar -xzf "$UPDATE_TMP/lan-scanner.tar.gz" -C "$UPDATE_TMP" 2>"$ERROR_LOG"
 SOURCE_DIR="$UPDATE_TMP/lan-scanner-main"
 [[ -s "$SOURCE_DIR/scanner.py" && -s "$SOURCE_DIR/preferences.py" && -s "$SOURCE_DIR/VERSION" && -s "$SOURCE_DIR/update.sh" && -s "$SOURCE_DIR/dependencies.sh" && -d "$SOURCE_DIR/static" ]]
 python3 - "$SOURCE_DIR/scanner.py" "$SOURCE_DIR/preferences.py" <<'PY'
@@ -72,9 +85,13 @@ for path in sys.argv[1:]:
 PY
 bash -n "$SOURCE_DIR/update.sh" "$SOURCE_DIR/install.sh"
 source "$SOURCE_DIR/dependencies.sh"
-ensure_dependencies
+PHASE="dependencies"
+write_status dependencies "Checking/installing system dependencies; this can take several minutes..." ""
+ensure_dependencies 2>"$ERROR_LOG"
+: >"$ERROR_LOG"
 NEW_VERSION=$(tr -d '\r\n' <"$SOURCE_DIR/VERSION")
 
+PHASE="installing"
 write_status installing "Installing version $NEW_VERSION without changing the port..." "$NEW_VERSION"
 STAGE_DIR=$(mktemp -d "${APP_DIR}.next.XXXXXX")
 install -d -m 755 "$STAGE_DIR/static"
@@ -92,7 +109,9 @@ mv "$APP_DIR" "$BACKUP_DIR"
 mv "$STAGE_DIR" "$APP_DIR"
 STAGE_DIR=""
 SWAPPED=1
-systemctl restart lan-scanner
+systemctl restart lan-scanner 2>"$ERROR_LOG"
+PHASE="starting"
+write_status starting "Checking that the updated service responds on its existing port..." "$NEW_VERSION"
 
 PORT=""
 [[ -s "$PORT_FILE" ]] && PORT=$(tr -cd '0-9' <"$PORT_FILE")
@@ -106,4 +125,5 @@ for _ in $(seq 1 30); do
     fi
     sleep 1
 done
+printf 'The service did not respond after 30 checks. See journalctl -u lan-scanner -n 40.\n' >>"$ERROR_LOG"
 false

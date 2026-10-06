@@ -106,3 +106,15 @@ Desktop and Android can save the selected visual-ping IPs as named groups. Open 
 Open a device’s details to edit its **CUSTOM DEVICE NAME / EDIT DEVICE NAME**. Labels are keyed by the recorded MAC, follow that device when discovery finds it at another IP, and leave the detected hostname intact. Clear the custom name to restore the detected hostname. A device without a recorded MAC cannot receive a stable label; routed VLAN discovery alone does not supply that MAC.
 
 Desktop groups and labels live in `LANSCAN_DATA_DIR/preferences.json` and survive application updates. Android stores them in private preferences, preserved by normal signed updates.
+
+### Recovering a failed desktop update
+
+Version `20261006-2` restores compatibility with older updaters that copy only `scanner.py` and `static/*`. Downloads now have a 120-second limit per route, with a second GitHub route if the first fails. The interface distinguishes downloading, validation, dependencies, installation and service startup, and reports the failure reason.
+
+If the installed updater cannot download the fix, run the current updater once without replacing the installed files manually:
+
+```bash
+curl -fSL --connect-timeout 10 --max-time 60 https://raw.githubusercontent.com/flotron/lan-scanner/main/update.sh -o /tmp/lan-scanner-update.sh && sudo bash /tmp/lan-scanner-update.sh
+```
+
+This retains the configured port and the data in `/var/lib/lan-scanner`. Custom installations should pass their existing `LANSCAN_APP_DIR` and `LANSCAN_DATA_DIR` when invoking the script.

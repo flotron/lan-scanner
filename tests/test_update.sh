@@ -58,3 +58,32 @@ run_case() {
 run_case success 0
 run_case rollback 1
 echo "transactional updater tests: OK"
+
+# Old updaters copied scanner.py and static/*, but no new Python modules.
+legacy="$TEST_ROOT/legacy"
+mkdir -p "$legacy/static"
+cp "$PROJECT_DIR/scanner.py" "$legacy/"
+cp "$PROJECT_DIR/static/"* "$legacy/static/"
+(cd / && python3 -I "$legacy/scanner.py" --help >/dev/null)
+echo "legacy updater file layout: OK"
+
+# A stalled download must retain both the application and user data, and explain why.
+root="$TEST_ROOT/download-failure"
+mkdir -p "$root/app" "$root/data" "$root/bin"
+echo old-version >"$root/app/VERSION"
+echo '{"groups":{"Servers":["192.168.0.2"]}}' >"$root/data/preferences.json"
+make_fake_commands "$root/bin"
+cat >"$root/bin/curl" <<'FAIL'
+#!/usr/bin/env bash
+[[ " $* " == *" --max-time 120 "* ]] || exit 99
+echo 'curl: (28) Connection timed out' >&2
+exit 28
+FAIL
+if PATH="$root/bin:$PATH" LANSCAN_ALLOW_NON_SYSTEMD=1 LANSCAN_APP_DIR="$root/app" LANSCAN_DATA_DIR="$root/data" bash "$PROJECT_DIR/update.sh"; then
+    echo 'Expected download failure' >&2; exit 1
+fi
+[[ $(<"$root/app/VERSION") == old-version ]]
+grep -q Servers "$root/data/preferences.json"
+grep -q 'Connection timed out' "$root/data/update-status.json"
+grep -q 'during downloading' "$root/data/update-status.json"
+echo 'download timeout preserves installation and reports cause: OK'
