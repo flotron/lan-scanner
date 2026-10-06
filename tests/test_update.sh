@@ -6,7 +6,7 @@ TEST_ROOT=$(mktemp -d)
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
 mkdir -p "$TEST_ROOT/release/lan-scanner-main"
-cp -a "$PROJECT_DIR/scanner.py" "$PROJECT_DIR/update.sh" "$PROJECT_DIR/install.sh" "$PROJECT_DIR/dependencies.sh" "$PROJECT_DIR/VERSION" "$PROJECT_DIR/static" "$TEST_ROOT/release/lan-scanner-main/"
+cp -a "$PROJECT_DIR/preferences.py" "$PROJECT_DIR/scanner.py" "$PROJECT_DIR/update.sh" "$PROJECT_DIR/install.sh" "$PROJECT_DIR/dependencies.sh" "$PROJECT_DIR/VERSION" "$PROJECT_DIR/static" "$TEST_ROOT/release/lan-scanner-main/"
 tar -czf "$TEST_ROOT/release.tar.gz" -C "$TEST_ROOT/release" lan-scanner-main
 
 make_fake_commands() {

@@ -46,6 +46,7 @@ systemctl disable --now lan-matrix-scanner 2>/dev/null || true
 rm -f "$SYSTEMD_DIR/lan-matrix-scanner.service"
 install -d -m 755 "$APP_DIR/static"
 install -m 755 "$SCRIPT_DIR/scanner.py" "$APP_DIR/scanner.py"
+install -m 644 "$SCRIPT_DIR/preferences.py" "$APP_DIR/preferences.py"
 install -m 755 "$SCRIPT_DIR/update.sh" "$APP_DIR/update.sh"
 install -m 644 "$SCRIPT_DIR/dependencies.sh" "$APP_DIR/dependencies.sh"
 install -m 644 "$SCRIPT_DIR/VERSION" "$APP_DIR/VERSION"

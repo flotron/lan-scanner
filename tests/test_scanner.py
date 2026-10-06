@@ -26,14 +26,10 @@ def test_immediate_watch_validates_and_pings_selected_ips(monkeypatch):
     assert [item["ip"] for item in result] == ["192.168.44.10", "192.168.44.11"]
 
 
-def test_immediate_watch_rejects_outside_subnet():
-    scanner.state["subnet"] = "192.168.44.0/24"
-    try:
-        scanner.watch_ips(["192.168.45.10"])
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("outside address must be rejected")
+def test_saved_watch_works_without_scan_and_across_subnets(monkeypatch):
+    monkeypatch.setitem(scanner.state, "subnet", "")
+    monkeypatch.setattr(scanner, "ping_host", lambda ip: {"ip": ip, "online": True})
+    assert [x["ip"] for x in scanner.watch_ips(["192.168.0.2", "192.168.13.8"])] == ["192.168.0.2", "192.168.13.8"]
 
 
 def test_update_is_rejected_when_versions_match(monkeypatch, tmp_path):

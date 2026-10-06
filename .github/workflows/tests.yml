@@ -16,10 +16,12 @@ jobs:
         with:
           node-version: "22"
       - run: pip install pytest
-      - run: python -m py_compile scanner.py
+      - run: python -m py_compile scanner.py preferences.py
       - run: node --check static/app.js
       - run: bash -n install.sh install-online.sh update.sh uninstall.sh
-      - run: pytest -q
+      - run: python -m pytest -q
+      - run: npm install --prefix "$RUNNER_TEMP/ui-tests" linkedom@0.18.12
+      - run: NODE_PATH="$RUNNER_TEMP/ui-tests/node_modules" node tests/test_watch_ui.cjs
       - run: bash tests/test_update.sh
       - run: bash tests/test_install_port.sh
       - run: bash tests/test_dependencies.sh

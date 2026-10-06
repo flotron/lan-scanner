@@ -19,11 +19,13 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from preferences import UserPreferences, watch_addresses
 
 BASE = Path(__file__).resolve().parent
 STATIC = BASE / "static"
 DATA_DIR = Path(os.getenv("LANSCAN_DATA_DIR", str(BASE / "data")))
 HISTORY_FILE = DATA_DIR / "devices.json"
+user_preferences = UserPreferences(DATA_DIR / "preferences.json")
 VERSION_FILE = BASE / "VERSION"
 UPDATE_SCRIPT = BASE / "update.sh"
 UPDATE_STATUS_FILE = DATA_DIR / "update-status.json"
@@ -614,23 +616,9 @@ def ping_host(ip: str) -> dict:
 
 
 def watch_ips(values) -> list[dict]:
-    if not isinstance(values, list) or not values:
+    if values == []:
         return []
-    if len(values) > 32:
-        raise ValueError("Immediate watch supports up to 32 selected IP addresses.")
-    with lock:
-        subnet = state.get("subnet")
-    if not subnet:
-        raise ValueError("Run a network scan before starting immediate watch.")
-    network = ipaddress.ip_network(subnet)
-    ips = []
-    for value in values:
-        address = ipaddress.ip_address(str(value))
-        if address.version != 4 or address not in network or address in (network.network_address, network.broadcast_address):
-            raise ValueError(f"{address} is outside the active scan range.")
-        ip = str(address)
-        if ip not in ips:
-            ips.append(ip)
+    ips = watch_addresses(values)
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(16, len(ips))) as pool:
         return list(pool.map(ping_host, ips))
 
@@ -684,6 +672,8 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         try:
+            if parsed.path == "/api/preferences":
+                return self.send_json(user_preferences.read())
             if parsed.path == "/api/interfaces":
                 found = interfaces()
                 return self.send_json({"interfaces": found, "default": found[0]["subnet"] if found else ""})
@@ -707,7 +697,7 @@ class Handler(SimpleHTTPRequestHandler):
         return super().do_GET()
 
     def do_POST(self):
-        if self.path not in ("/api/scan", "/api/scan/stop", "/api/watch", "/api/update"):
+        if self.path not in ("/api/scan", "/api/scan/stop", "/api/watch", "/api/update", "/api/preferences"):
             return self.send_json({"error": "Not found"}, 404)
         try:
             if self.path == "/api/update":
@@ -718,14 +708,16 @@ class Handler(SimpleHTTPRequestHandler):
             body = json.loads(self.rfile.read(size) or b"{}")
             if not isinstance(body, dict):
                 raise ValueError("Expected a JSON object.")
+            if self.path == "/api/preferences":
+                return self.send_json(user_preferences.update(body))
             if self.path == "/api/scan/stop":
                 return self.send_json(stop_scan())
             if self.path == "/api/watch":
                 return self.send_json({"results": watch_ips(body.get("ips"))})
             subnet = start_scan(body.get("subnet", ""))
             return self.send_json({"started": True, "subnet": subnet}, 202)
-        except (ValueError, json.JSONDecodeError) as exc:
-            return self.send_json({"error": f"Invalid subnet: {exc}"}, 400)
+        except (ValueError, OSError) as exc:
+            return self.send_json({"error": str(exc)}, 400)
 
 
 def main():

@@ -98,3 +98,11 @@ You can also use the `UPDATE` button in the web interface without opening a term
 The installer selects a free port only on the first installation. Reinstalling or updating reuses the port stored in `/var/lib/lan-scanner/port`; it chooses another port only during recovery when the saved port is genuinely occupied by a different process.
 
 Required dependencies are installed automatically: Python 3, Nmap, `iproute2`, ping utilities, curl, tar and systemd tools. Avahi and NetBIOS lookup tools are also installed when available to improve host-name identification. The supported package managers are APT, DNF and Pacman; an unrelated broken APT repository produces a warning and the installer still tries the available package indexes.
+
+### Saved ping groups and device names
+
+Desktop and Android can save the selected visual-ping IPs as named groups. Open **SAVED PING GROUPS / SAVED GROUPS** to load, replace or delete a group; loading starts monitoring without requiring a discovery scan. Desktop supports 32 IPs per group and Android 16, with up to 32 saved groups. Selection survives reopening and changing the scan range. Android pings resume when the app is in the foreground. Groups store fixed IPs, not MACs, and are saved separately on each installation.
+
+Open a device’s details to edit its **CUSTOM DEVICE NAME / EDIT DEVICE NAME**. Labels are keyed by the recorded MAC, follow that device when discovery finds it at another IP, and leave the detected hostname intact. Clear the custom name to restore the detected hostname. A device without a recorded MAC cannot receive a stable label; routed VLAN discovery alone does not supply that MAC.
+
+Desktop groups and labels live in `LANSCAN_DATA_DIR/preferences.json` and survive application updates. Android stores them in private preferences, preserved by normal signed updates.

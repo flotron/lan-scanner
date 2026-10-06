@@ -20,6 +20,11 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.VelocityTracker
 import android.view.ViewConfiguration
+import android.widget.ArrayAdapter
+import android.widget.Spinner
+import android.widget.LinearLayout
+import android.widget.Button
+import android.text.InputFilter
 import android.widget.EditText
 import android.widget.OverScroller
 import android.widget.TextView
@@ -52,7 +57,11 @@ class LanDashboardView(context: Context) : View(context) {
     private var contentHeight = 1200f
     private val rowRects = mutableListOf<Pair<RectF, LanDevice>>()
     private val watchRects = mutableListOf<Pair<RectF, LanDevice>>()
-    private val watched = linkedSetOf<String>()
+    private val watchPreferences = WatchPreferences(context)
+    private val watched = watchPreferences.selection().toCollection(linkedSetOf())
+    private var watchGeneration = 0
+    private var groupsRect = RectF()
+    private var renameRect = RectF()
     private val watchInFlight = mutableSetOf<String>()
     private val watchResults = mutableMapOf<String, Pair<Boolean, Long?>>()
     private val watchHistory = mutableMapOf<String, MutableList<Boolean>>()
@@ -138,7 +147,6 @@ class LanDashboardView(context: Context) : View(context) {
         if (disposed) return
         val completed = state.scanning && !value.scanning && value.progress == 100
         if (state.subnet != value.subnet && value.scanning) {
-            watched.clear(); watchHistory.clear(); watchResults.clear()
             selected = null; detailRequest++; scrollYValue = 0f
         }
         state = value
@@ -158,7 +166,7 @@ class LanDashboardView(context: Context) : View(context) {
         y = drawHeader(canvas, pad, y)
         y = drawControls(canvas, pad, y + 22f * density)
         if (state.scanning) y = drawProgress(canvas, pad, y + 12f * density)
-        if (watched.isNotEmpty()) y = drawWatchPanel(canvas, pad, y + 12f * density)
+        y = drawWatchPanel(canvas, pad, y + 12f * density)
         y = drawStats(canvas, pad, y + 14f * density)
         y = drawDevices(canvas, pad, y + 14f * density)
         contentHeight = y + 40f * density
@@ -224,12 +232,15 @@ class LanDashboardView(context: Context) : View(context) {
     }
 
     private fun drawWatchPanel(canvas: Canvas, x: Float, y: Float): Float {
-        val targets = state.devices.filter { it.ip in watched }
-        val h = (48 + targets.size * 61).toFloat() * density
+        val byIp = state.devices.associateBy { it.ip }
+        val targets = watched.map { byIp[it] ?: LanDevice(it, "", "", "") }
+        val h = (90 + targets.size * 76).toFloat() * density
         panel(canvas, RectF(x, y, width - x, y + h), strong = true)
         text(canvas, "IMMEDIATE WATCH", x + 14f * density, y + 19f * density, 8f, green, bold = true)
         text(canvas, "SECOND-BY-SECOND PING", x + 14f * density, y + 35f * density, 10f, pale, bold = true)
-        var rowY = y + 48f * density
+        groupsRect = RectF(x + 12f * density, y + 44f * density, width - x - 12f * density, y + 78f * density)
+        button(canvas, groupsRect, "SAVED GROUPS ▾  ·  ${watched.size} TARGETS")
+        var rowY = y + 90f * density
         targets.forEach { device ->
             val result = watchResults[device.ip]
             val online = result?.first
@@ -246,7 +257,8 @@ class LanDashboardView(context: Context) : View(context) {
                 canvas.drawRect(box, paint)
             }
             line(canvas, x + 12f * density, rowY + 50f * density, width - x - 12f * density, rowY + 50f * density, alpha = 25)
-            rowY += 61f * density
+            text(canvas, watchPreferences.name(device).take(42), x + 14f * density, rowY + 64f * density, 8f, pale)
+            rowY += 76f * density
         }
         return y + h
     }
@@ -307,7 +319,7 @@ class LanDashboardView(context: Context) : View(context) {
                 text(canvas, if (device.online) "ONLINE" else "OFFLINE", x + 59f * density, rowY + 29f * density, 8f, if (device.online) green else dim, bold = true, glow = device.online)
                 text(canvas, device.ip, x + 13f * density, rowY + 59f * density, 13f, pale, bold = true)
                 text(canvas, device.mac, x + 13f * density, rowY + 78f * density, 9f, dim)
-                text(canvas, device.name, x + 170f * density, rowY + 58f * density, 9f, pale)
+                text(canvas, watchPreferences.name(device).take(24), x + 170f * density, rowY + 58f * density, 9f, pale)
                 text(canvas, device.vendor.take(25), x + 170f * density, rowY + 78f * density, 8f, dim)
                 text(canvas, "›", width - x - 17f * density, rowY + 65f * density, 20f, green, glow = true)
                 rowRects += rect to device
@@ -322,7 +334,7 @@ class LanDashboardView(context: Context) : View(context) {
             .filter { statusFilter == 0 || (statusFilter == 1 && it.online) || (statusFilter == 2 && !it.online) }
             .let { devices -> when (sortMode) {
                 1 -> devices.sortedWith(compareByDescending<LanDevice> { it.online }.thenBy { ipNumeric(it.ip) })
-                2 -> devices.sortedBy { it.name.lowercase() }
+                2 -> devices.sortedBy { watchPreferences.name(it).lowercase() }
                 3 -> devices.sortedBy { it.mac }
                 4 -> devices.sortedBy { it.vendor.lowercase() }
                 else -> devices.sortedBy { ipNumeric(it.ip) }
@@ -341,12 +353,13 @@ class LanDashboardView(context: Context) : View(context) {
         detailLine(canvas, "STATUS", if (device.online) "ONLINE" else "OFFLINE", top + 112f * density)
         detailLine(canvas, "MAC", device.mac, top + 150f * density)
         detailLine(canvas, "MANUFACTURER", device.vendor, top + 188f * density)
-        detailLine(canvas, "HOST", device.name, top + 226f * density)
+        detailLine(canvas, "HOST", watchPreferences.name(device), top + 226f * density)
         detailLine(canvas, "LATENCY", device.latencyMs?.let { "${it} ms" } ?: "NO REPLY", top + 264f * density)
         text(canvas, "OPEN TCP PORTS", detailRect.left + 18f * density, top + 304f * density, 8f, dim)
         val ports = detailPorts
         text(canvas, when { ports == null -> "SCANNING..."; ports.isEmpty() -> "NONE FOUND"; else -> ports.joinToString("  ") }, detailRect.left + 18f * density, top + 334f * density, 11f, if (ports == null) green else pale)
-        button(canvas, RectF(detailRect.left + 18f * density, top + 370f * density, detailRect.right - 18f * density, top + 414f * density), "CLOSE")
+        renameRect = RectF(detailRect.left + 18f * density, top + 370f * density, detailRect.right - 18f * density, top + 414f * density)
+        button(canvas, renameRect, "EDIT DEVICE NAME")
     }
 
     private fun detailLine(canvas: Canvas, label: String, value: String, y: Float) {
@@ -380,7 +393,9 @@ class LanDashboardView(context: Context) : View(context) {
                     return true
                 }
                 val x = event.x; val y = event.y + scrollYValue
+                if (selected != null && renameRect.contains(x, y)) { showNameDialog(selected!!); return true }
                 if (selected != null) { selected = null; detailPorts = null; detailRequest++; invalidate(); return true }
+                if (groupsRect.contains(x, y)) { showWatchGroupsDialog(); return true }
                 if (aboutRect.contains(x, y)) { showAboutDialog(); return true }
                 if (rangeRect.contains(x, y)) { showRangeDialog(); return true }
                 if (scanRect.contains(x, y)) { if (state.scanning) engine.cancel() else { displayedRange = engine.currentRange(); engine.scan(customRange) }; return true }
@@ -388,8 +403,10 @@ class LanDashboardView(context: Context) : View(context) {
                 if (sortRect.contains(x, y)) { sortMode = (sortMode + 1) % 5; refreshVisibleDevices(); invalidate(); return true }
                 watchRects.firstOrNull { it.first.contains(x, y) }?.let { (_, device) ->
                     if (device.ip in watched) {
-                        watched.remove(device.ip); watchHistory.remove(device.ip)
+                        watched.remove(device.ip); watchHistory.remove(device.ip); watchResults.remove(device.ip)
                     } else if (watched.size < 16) watched.add(device.ip)
+                    watchGeneration++
+                    watchPreferences.saveSelection(watched)
                     invalidate(); return true
                 }
                 rowRects.firstOrNull { it.first.contains(x, y) }?.let { (_, device) ->
@@ -444,15 +461,16 @@ class LanDashboardView(context: Context) : View(context) {
     private val watchTicker = object : Runnable {
         override fun run() {
             if (!active || disposed) return
-            state.devices.filter { it.ip in watched }.forEach { device ->
-                if (!watchInFlight.add(device.ip)) return@forEach
+            val generation = watchGeneration
+            watched.toList().forEach { ip ->
+                if (!watchInFlight.add(ip)) return@forEach
                 watchWorkers.execute {
-                    val latency = runCatching { engine.probe(device.ip) }.getOrNull()
+                    val latency = runCatching { engine.probe(ip) }.getOrNull()
                     handler.post {
-                        watchInFlight.remove(device.ip)
-                        if (active && !disposed && device.ip in watched) {
-                            watchResults[device.ip] = (latency != null) to latency
-                            val history = watchHistory.getOrPut(device.ip) { mutableListOf() }
+                        watchInFlight.remove(ip)
+                        if (active && !disposed && generation == watchGeneration && ip in watched) {
+                            watchResults[ip] = (latency != null) to latency
+                            val history = watchHistory.getOrPut(ip) { mutableListOf() }
                             val slots = max(8, ((width - 64f * density) / (13f * density)).toInt())
                             if (history.size >= slots) history.clear()
                             history += latency != null
@@ -463,6 +481,88 @@ class LanDashboardView(context: Context) : View(context) {
             }
             handler.postDelayed(this, 1000)
         }
+    }
+
+    private fun showNameDialog(device: LanDevice) {
+        if (UserLabels.macKey(device.mac) == null) {
+            AlertDialog.Builder(context).setTitle("DEVICE NAME")
+                .setMessage("A recorded MAC is required to keep a name linked to the device when its IP changes.")
+                .setPositiveButton("CLOSE", null).show()
+            return
+        }
+        val input = EditText(context).apply {
+            typeface = matrixTypeface; setSingleLine(); filters = arrayOf(InputFilter.LengthFilter(64))
+            setText(watchPreferences.customName(device.mac)); hint = "Custom device name"
+        }
+        val dialog = AlertDialog.Builder(context).setTitle("NAME SAVED BY MAC")
+            .setMessage("${device.mac}\nDetected host: ${device.name.ifBlank { "Unknown" }}\nLeave empty to restore the detected name.")
+            .setView(input).setPositiveButton("SAVE", null).setNegativeButton("CANCEL", null).show()
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            runCatching { watchPreferences.saveName(device.mac, input.text.toString()) }
+                .onSuccess { refreshVisibleDevices(); invalidate(); dialog.dismiss() }
+                .onFailure { input.error = it.message }
+        }
+    }
+
+    private fun replaceWatch(ips: List<String>) {
+        watchGeneration++
+        watched.clear(); watched.addAll(ips)
+        watchHistory.clear(); watchResults.clear()
+        watchPreferences.saveSelection(watched)
+        invalidate()
+    }
+
+    private fun showWatchGroupsDialog() {
+        val groups = watchPreferences.groups()
+        val names = groups.keys.toList()
+        val content = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding((20 * density).toInt(), 0, (20 * density).toInt(), 0)
+        }
+        val selector = Spinner(context).apply {
+            adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item,
+                listOf("SELECT A SAVED GROUP…") + names)
+        }
+        val nameInput = EditText(context).apply {
+            hint = "Name for current selection"; typeface = matrixTypeface; setSingleLine()
+            filters = arrayOf(InputFilter.LengthFilter(64))
+        }
+        val help = TextView(context).apply {
+            text = "${watched.size} selected IPs. Groups keep fixed IP addresses, even across subnets."
+            typeface = matrixTypeface
+        }
+        val delete = Button(context).apply { text = "DELETE SELECTED GROUP" }
+        val clear = Button(context).apply { text = "CLEAR CURRENT SELECTION" }
+        content.addView(help); content.addView(selector); content.addView(nameInput)
+        content.addView(delete); content.addView(clear)
+        val dialog = AlertDialog.Builder(context).setTitle("PING GROUPS")
+            .setView(content).setPositiveButton("LOAD", null)
+            .setNeutralButton("SAVE CURRENT", null).setNegativeButton("CLOSE", null).show()
+        fun chosen(): String? = names.getOrNull(selector.selectedItemPosition - 1)
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val name = chosen()
+            if (name == null) { help.text = "Choose a saved group first." }
+            else { replaceWatch(groups.getValue(name)); dialog.dismiss() }
+        }
+        dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+            val name = nameInput.text.toString().trim().ifBlank { chosen().orEmpty() }
+            fun save() {
+                runCatching { watchPreferences.saveGroup(name, watched.toList()) }
+                    .onSuccess { dialog.dismiss() }.onFailure { help.text = it.message }
+            }
+            if (groups.containsKey(name)) {
+                AlertDialog.Builder(context).setTitle("REPLACE GROUP?").setMessage(name)
+                    .setPositiveButton("REPLACE") { _, _ -> save() }.setNegativeButton("CANCEL", null).show()
+            } else save()
+        }
+        delete.setOnClickListener {
+            val name = chosen()
+            if (name == null) help.text = "Choose a saved group first."
+            else AlertDialog.Builder(context).setTitle("DELETE GROUP?").setMessage(name)
+                .setPositiveButton("DELETE") { _, _ -> watchPreferences.deleteGroup(name); dialog.dismiss(); showWatchGroupsDialog() }
+                .setNegativeButton("CANCEL", null).show()
+        }
+        clear.setOnClickListener { replaceWatch(emptyList()); dialog.dismiss() }
     }
 
     private fun showRangeDialog() {

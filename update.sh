@@ -64,10 +64,11 @@ curl -fL --retry 3 --connect-timeout 10 \
     -o "$UPDATE_TMP/lan-scanner.tar.gz"
 tar -xzf "$UPDATE_TMP/lan-scanner.tar.gz" -C "$UPDATE_TMP"
 SOURCE_DIR="$UPDATE_TMP/lan-scanner-main"
-[[ -s "$SOURCE_DIR/scanner.py" && -s "$SOURCE_DIR/VERSION" && -s "$SOURCE_DIR/update.sh" && -s "$SOURCE_DIR/dependencies.sh" && -d "$SOURCE_DIR/static" ]]
-python3 - "$SOURCE_DIR/scanner.py" <<'PY'
+[[ -s "$SOURCE_DIR/scanner.py" && -s "$SOURCE_DIR/preferences.py" && -s "$SOURCE_DIR/VERSION" && -s "$SOURCE_DIR/update.sh" && -s "$SOURCE_DIR/dependencies.sh" && -d "$SOURCE_DIR/static" ]]
+python3 - "$SOURCE_DIR/scanner.py" "$SOURCE_DIR/preferences.py" <<'PY'
 import pathlib, sys
-compile(pathlib.Path(sys.argv[1]).read_text(), sys.argv[1], "exec")
+for path in sys.argv[1:]:
+    compile(pathlib.Path(path).read_text(), path, "exec")
 PY
 bash -n "$SOURCE_DIR/update.sh" "$SOURCE_DIR/install.sh"
 source "$SOURCE_DIR/dependencies.sh"
@@ -78,6 +79,7 @@ write_status installing "Installing version $NEW_VERSION without changing the po
 STAGE_DIR=$(mktemp -d "${APP_DIR}.next.XXXXXX")
 install -d -m 755 "$STAGE_DIR/static"
 install -m 755 "$SOURCE_DIR/scanner.py" "$STAGE_DIR/scanner.py"
+install -m 644 "$SOURCE_DIR/preferences.py" "$STAGE_DIR/preferences.py"
 install -m 755 "$SOURCE_DIR/update.sh" "$STAGE_DIR/update.sh"
 install -m 644 "$SOURCE_DIR/dependencies.sh" "$STAGE_DIR/dependencies.sh"
 install -m 644 "$SOURCE_DIR/VERSION" "$STAGE_DIR/VERSION"
